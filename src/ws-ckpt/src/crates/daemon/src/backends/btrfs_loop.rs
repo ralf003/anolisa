@@ -71,12 +71,7 @@ impl BtrfsLoopBackend {
         // 4. rsync migration from backup into subvolume
         let src = format!("{}/", backup_path);
         let status = Command::new("rsync")
-            .args([
-                "-a",
-                "--copy-unsafe-links",
-                &src,
-                &subvol_path.to_string_lossy(),
-            ])
+            .args(["-a", &src, &subvol_path.to_string_lossy()])
             .status()
             .await
             .context("failed to run rsync")?;
