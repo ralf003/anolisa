@@ -138,7 +138,7 @@ Write the following to `~/.claude/settings.json`:
 ```json
 {
   "env": {
-    "ANTHROPIC_BASE_URL": "https://dashscope.aliyuncs.com/api/v2/apps/claude-code-proxy",
+    "ANTHROPIC_BASE_URL": "https://dashscope.aliyuncs.com/apps/anthropic",
     "ANTHROPIC_AUTH_TOKEN": "YOUR_API_KEY",
     "ANTHROPIC_MODEL": "qwen3-coder-plus",
     "ANTHROPIC_SMALL_FAST_MODEL": "qwen3-coder-plus"
@@ -153,7 +153,7 @@ Replace `YOUR_API_KEY` with the user's actual API key.
 If the user prefers shell env vars over `settings.json`, append to `~/.bashrc`:
 
 ```bash
-export ANTHROPIC_BASE_URL="https://dashscope.aliyuncs.com/api/v2/apps/claude-code-proxy"
+export ANTHROPIC_BASE_URL="https://dashscope.aliyuncs.com/apps/anthropic"
 export ANTHROPIC_AUTH_TOKEN="YOUR_API_KEY"
 export ANTHROPIC_MODEL="qwen3-coder-plus"
 export ANTHROPIC_SMALL_FAST_MODEL="qwen3-coder-plus"

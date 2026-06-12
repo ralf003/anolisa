@@ -261,7 +261,7 @@ write_config() {
   cat > "$settings_file" <<JSONEOF
 {
   "env": {
-    "ANTHROPIC_BASE_URL": "https://dashscope.aliyuncs.com/api/v2/apps/claude-code-proxy",
+    "ANTHROPIC_BASE_URL": "https://dashscope.aliyuncs.com/apps/anthropic",
     "ANTHROPIC_AUTH_TOKEN": "${api_key}",
     "ANTHROPIC_MODEL": "qwen3-coder-plus",
     "ANTHROPIC_SMALL_FAST_MODEL": "qwen3-coder-plus"
