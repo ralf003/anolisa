@@ -202,14 +202,42 @@ pub async fn init(state: &Arc<DaemonState>, workspace: &str) -> anyhow::Result<R
     }
     if let Some(existing) = state.get_by_path(&abs_path) {
         let ws = existing.read().await;
-        info!(
-            "workspace already initialized via path: {} (ws_id={})",
+        let expected_target = state.backend.data_root().join(&ws.ws_id);
+        let read_link_res = tokio::fs::read_link(&abs_path).await;
+        let symlink_ok = matches!(&read_link_res, Ok(t) if *t == expected_target);
+        if symlink_ok {
+            info!(
+                "workspace already initialized via path: {} (ws_id={})",
+                abs_path.display(),
+                ws.ws_id
+            );
+            return Ok(Response::InitOk {
+                ws_id: ws.ws_id.clone(),
+            });
+        }
+        let hint = if read_link_res.is_err() {
+            "\n  note: path is currently a regular directory — \
+             move or rename it before running recover to avoid data loss"
+        } else {
+            ""
+        };
+        warn!(
+            "workspace {} registered as {} but symlink missing or incorrect; \
+             run 'ws-ckpt recover -w {}' to repair",
             abs_path.display(),
-            ws.ws_id
+            ws.ws_id,
+            abs_path.display()
         );
-        return Ok(Response::InitOk {
-            ws_id: ws.ws_id.clone(),
-        });
+        return Ok(error_resp(
+            ErrorCode::InternalError,
+            format!(
+                "workspace registered (ws_id={}) but symlink missing or broken; \
+                 run 'ws-ckpt recover -w {}' to restore, then re-init{}",
+                ws.ws_id,
+                abs_path.display(),
+                hint,
+            ),
+        ));
     }
     if abs_path.starts_with(&state.mount_path) {
         // The user-facing path canonicalises into our mount root. Two
@@ -755,18 +783,50 @@ mod tests {
             test_backend(),
             test_state_dir(),
         ));
+        let data_root = state.backend.data_root().to_path_buf();
+        let subvol = data_root.join("ws-exist");
+        tokio::fs::create_dir_all(&subvol).await.unwrap();
+        let tmpdir = tempfile::tempdir().unwrap();
+        let ws_link = tmpdir.path().join("myws");
+        tokio::fs::symlink(&subvol, &ws_link).await.unwrap();
+        state.register_workspace(
+            "ws-exist".to_string(),
+            ws_link.clone(),
+            SnapshotIndex::new(ws_link.clone()),
+        );
+        let resp = init(&state, &ws_link.to_string_lossy()).await.unwrap();
+        let _ = tokio::fs::remove_dir_all(&subvol).await;
+        match resp {
+            Response::InitOk { ws_id } => assert_eq!(ws_id, "ws-exist"),
+            _ => panic!("expected InitOk for already-initialized workspace"),
+        }
+    }
+
+    #[tokio::test]
+    async fn init_registered_but_regular_dir_returns_error_with_hint() {
+        let state = Arc::new(DaemonState::new(
+            test_config(),
+            test_backend(),
+            test_state_dir(),
+        ));
         let tmpdir = tempfile::tempdir().unwrap();
         let path = tmpdir.path().to_string_lossy().to_string();
         let canon = tokio::fs::canonicalize(&path).await.unwrap();
         state.register_workspace(
-            "ws-exist".to_string(),
+            "ws-gone".to_string(),
             canon.clone(),
             SnapshotIndex::new(canon),
         );
         let resp = init(&state, &path).await.unwrap();
         match resp {
-            Response::InitOk { ws_id } => assert_eq!(ws_id, "ws-exist"),
-            _ => panic!("expected InitOk for already-initialized workspace"),
+            Response::Error { code, message } => {
+                assert_eq!(code, ErrorCode::InternalError);
+                assert!(
+                    message.contains("regular directory"),
+                    "hint missing: {message}"
+                );
+            }
+            _ => panic!("expected error for registered workspace whose symlink was replaced"),
         }
     }
 

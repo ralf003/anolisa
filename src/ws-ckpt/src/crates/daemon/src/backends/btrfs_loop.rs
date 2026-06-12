@@ -245,15 +245,21 @@ impl StorageBackend for BtrfsLoopBackend {
         let subvol_path = self.mount_path.join(ws_id);
         let snap_base = self.snapshots_dir.join(ws_id);
 
-        // 1. Remove symlink (skip if not a symlink)
-        let is_symlink = match tokio::fs::symlink_metadata(original_path).await {
-            Ok(meta) => meta.file_type().is_symlink(),
-            Err(_) => false,
-        };
-        if is_symlink {
-            tokio::fs::remove_file(original_path)
-                .await
-                .context("failed to remove symlink")?;
+        // 1. Remove symlink; refuse if a non-symlink directory occupies the path
+        match tokio::fs::symlink_metadata(original_path).await {
+            Ok(meta) if meta.file_type().is_symlink() => {
+                tokio::fs::remove_file(original_path)
+                    .await
+                    .context("failed to remove symlink")?;
+            }
+            Ok(_) => {
+                bail!(
+                    "cannot recover: {} is a regular directory, not a workspace symlink; \
+                     move or rename it first to avoid data loss",
+                    original_path
+                );
+            }
+            Err(_) => {} // path gone, rsync will recreate
         }
 
         // 2. Rsync subvolume contents back to original path (restore as normal directory)
