@@ -1,10 +1,11 @@
 manifest_version = 2
 
 [component]
-name = "sandbox-firecracker"
+name = "sandbox-rund"
 version = "0.1.0"
 layer = "osbase"
-description = "Firecracker microVM — minimal-overhead VM isolation for Agent workloads"
+domain = "sandbox"
+description = "Kata 3.x runtime-rs + Dragonball (in-process VMM) — Rust-native microVM isolation"
 
 [install]
 modes = ["system"]
@@ -12,17 +13,22 @@ modes = ["system"]
 [environment]
 requires_os = "linux"
 requires_arch = ["x86_64", "aarch64"]
-requires_kernel = ">=4.14"
+requires_kernel = ">=5.10"
 
 [environment.requires_env]
 kvm_available = "true"
 
 [dependencies]
-runtime = ["firecracker"]
+runtime = ["kata-containers-rund"]
+shim = ["containerd-shim-kata-v2"]
 
 [scenario_defaults]
-scenario = "firecracker"
-vmm = "firecracker"
+scenario = "rund"
+vmm = "dragonball"
+shim = "containerd-shim-kata-v2"
+shim_impl = "runtime-rs"
+guest_kernel = "vmlinux-anolisa-6.6"
+guest_rootfs = "kata-containers-initrd-anolisa"
 isolation_type = "microvm"
 
 [[support_matrix]]
@@ -45,4 +51,4 @@ os_version = ["24.04", "26.04"]
 arch = ["x86_64"]
 kernel = ">=6.5"
 tier = "p2"
-notes = "best-effort; custom kernel may be needed"
+notes = "best-effort; Dragonball not packaged for ubuntu"

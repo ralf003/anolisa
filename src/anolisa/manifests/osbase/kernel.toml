@@ -1,7 +1,10 @@
+manifest_version = 2
+
 [component]
 name = "kernel"
 version = "0.1.0"
 layer = "osbase"
+domain = "kernel"
 description = "ANOLISA kernel substrate — Agent-aware scheduling, eBPF control plane, memory optimization"
 
 [install]
@@ -16,3 +19,32 @@ privilege = "root"
 
 [dependencies]
 runtime = ["kernel-devel", "bpftool"]
+
+[scenario_defaults]
+domain = "kernel"
+variants = ["agentic", "stock"]
+default_variant = "agentic"
+
+[[support_matrix]]
+os = "alinux"
+os_version = "4"
+arch = ["x86_64", "aarch64"]
+kernel = ">=6.6"
+tier = "p0"
+notes = "agentic variant — Agent-aware scheduling, eBPF control plane, memory optimization"
+
+[[support_matrix]]
+os = "alinux"
+os_version = "3"
+arch = ["x86_64"]
+kernel = ">=5.10"
+tier = "p1"
+notes = "stock variant only on alinux 3"
+
+[[support_matrix]]
+os = "ubuntu"
+os_version = ["24.04", "26.04"]
+arch = ["x86_64"]
+kernel = ">=6.5"
+tier = "p2"
+notes = "stock variant; agentic kernel not packaged for ubuntu"

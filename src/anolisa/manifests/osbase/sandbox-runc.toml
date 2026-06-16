@@ -1,10 +1,11 @@
 manifest_version = 2
 
 [component]
-name = "sandbox-firecracker"
+name = "sandbox-runc"
 version = "0.1.0"
 layer = "osbase"
-description = "Firecracker microVM — minimal-overhead VM isolation for Agent workloads"
+domain = "sandbox"
+description = "runc — OCI-compliant namespace/cgroup container runtime (no VMM)"
 
 [install]
 modes = ["system"]
@@ -12,18 +13,16 @@ modes = ["system"]
 [environment]
 requires_os = "linux"
 requires_arch = ["x86_64", "aarch64"]
-requires_kernel = ">=4.14"
-
-[environment.requires_env]
-kvm_available = "true"
+requires_kernel = ">=4.5"
 
 [dependencies]
-runtime = ["firecracker"]
+runtime = ["runc"]
+shim = ["containerd-shim-runc-v2"]
 
 [scenario_defaults]
-scenario = "firecracker"
-vmm = "firecracker"
-isolation_type = "microvm"
+scenario = "runc"
+isolation_type = "namespace"
+shim = "containerd-shim-runc-v2"
 
 [[support_matrix]]
 os = "alinux"
@@ -42,7 +41,7 @@ tier = "p1"
 [[support_matrix]]
 os = "ubuntu"
 os_version = ["24.04", "26.04"]
-arch = ["x86_64"]
+arch = ["x86_64", "aarch64"]
 kernel = ">=6.5"
 tier = "p2"
-notes = "best-effort; custom kernel may be needed"
+notes = "broadly supported; runc ships in upstream container toolchains"

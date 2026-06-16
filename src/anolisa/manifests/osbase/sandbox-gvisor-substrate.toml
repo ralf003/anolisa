@@ -1,0 +1,50 @@
+manifest_version = 2
+
+[component]
+name = "sandbox-gvisor-substrate"
+version = "0.1.0"
+layer = "osbase"
+domain = "sandbox"
+description = "gVisor with atelet substrate — runsc + atelet/ateom-gvisor for ANOLISA-managed lifecycle"
+
+[install]
+modes = ["system"]
+
+[environment]
+requires_os = "linux"
+requires_arch = ["x86_64", "aarch64"]
+requires_kernel = ">=4.15"
+
+[dependencies]
+runtime = ["gvisor-runsc"]
+shim = ["containerd-shim-runsc-v1"]
+substrate = ["atelet", "ateom-gvisor"]
+
+[scenario_defaults]
+scenario = "gvisor-substrate"
+vmm = "runsc+atelet"
+shim = "containerd-shim-runsc-v1"
+isolation_type = "userspace-kernel"
+
+[[support_matrix]]
+os = "alinux"
+os_version = "4"
+arch = ["x86_64", "aarch64"]
+kernel = ">=6.6"
+tier = "p0"
+notes = "atelet + ateom-gvisor RPMs published via anolisa-sandbox repo"
+
+[[support_matrix]]
+os = "alinux"
+os_version = "3"
+arch = ["x86_64"]
+kernel = ">=5.10"
+tier = "p1"
+
+[[support_matrix]]
+os = "ubuntu"
+os_version = ["24.04", "26.04"]
+arch = ["x86_64"]
+kernel = ">=6.5"
+tier = "p2"
+notes = "best-effort; atelet substrate not packaged for ubuntu"

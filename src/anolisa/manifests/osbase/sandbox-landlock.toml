@@ -1,3 +1,5 @@
+manifest_version = 2
+
 [component]
 name = "sandbox-landlock"
 version = "0.1.0"
@@ -13,3 +15,30 @@ requires_kernel = ">=5.13"
 
 [environment.requires_env]
 landlock_abi = ">=1"
+
+[scenario_defaults]
+scenario = "landlock"
+isolation_type = "lsm"
+
+[[support_matrix]]
+os = "alinux"
+os_version = "4"
+arch = ["x86_64", "aarch64"]
+kernel = ">=6.6"
+tier = "p0"
+
+[[support_matrix]]
+os = "alinux"
+os_version = "3"
+arch = ["x86_64"]
+kernel = ">=5.13"
+tier = "p1"
+notes = "requires kernel with Landlock LSM enabled"
+
+[[support_matrix]]
+os = "ubuntu"
+os_version = ["24.04", "26.04"]
+arch = ["x86_64", "aarch64"]
+kernel = ">=6.5"
+tier = "p2"
+notes = "best-effort; Landlock ABI varies by distro kernel build"
