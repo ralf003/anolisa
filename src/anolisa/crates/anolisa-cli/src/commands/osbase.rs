@@ -1,9 +1,11 @@
-use clap::{Args, Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
-use anolisa_core::{
-    OsbaseDomain, OsbaseInstallError, OsbaseInstallOutcome, OsbaseInstallRequest,
-    OsbasePhaseStatus, RegisterHandler, execute_install,
+use anolisa_core::sandbox_install::{
+    InstallPhase, PhaseStatus, SandboxBackendKind, SandboxInstallError, SandboxInstallOutcome,
+    SandboxInstallRequest, build_dry_run_plan, execute_sandbox_install, validate_request,
 };
+use anolisa_platform::fs_layout::FsLayout;
+use anolisa_platform::privilege;
 
 use crate::context::CliContext;
 use crate::response::{self, CliError};
@@ -16,19 +18,15 @@ pub struct OsbaseArgs {
 
 #[derive(Subcommand)]
 pub enum OsbaseCommands {
-    /// Kernel variant management (agentic | stock)
+    /// Kernel modules and eBPF base management
     Kernel(KernelArgs),
-    /// Sandbox scenario management
-    /// (runc, rund, kata-fc, kata-clh, kata-qemu, firecracker, gvisor,
-    /// gvisor-substrate, landlock)
+    /// Sandbox substrate management (container, kata, firecracker, gvisor, vm, landlock)
     Sandbox(SandboxArgs),
     /// Security overlay management (loongshield, seccomp-profiles)
     Security(SecurityArgs),
 }
 
-// ===========================================================================
-// Kernel
-// ===========================================================================
+// --- Kernel ---
 
 #[derive(Parser)]
 pub struct KernelArgs {
@@ -38,35 +36,48 @@ pub struct KernelArgs {
 
 #[derive(Subcommand)]
 pub enum KernelCommands {
-    /// Install a kernel variant
-    Install(KernelInstallArgs),
+    /// Install kernel modules and eBPF programs
+    Install {
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Remove kernel modules
     Remove,
     /// Show kernel substrate status
     Status,
 }
 
-#[derive(Args)]
-pub struct KernelInstallArgs {
-    /// Kernel variant: `agentic` or `stock`
-    pub variant: String,
+// --- Sandbox ---
 
-    /// Pin a specific kernel version
-    #[arg(long)]
-    pub version: Option<String>,
-
-    /// Bootloader to configure
-    #[arg(long, default_value = "auto")]
-    pub bootloader: String,
-
-    /// Set as next-boot default
-    #[arg(long, default_value_t = false)]
-    pub default: bool,
+/// Sandbox backend target (isolation engine)
+#[derive(Clone, Debug, ValueEnum)]
+pub enum SandboxTarget {
+    /// OCI container runtime (runc/rund)
+    Container,
+    /// Kata Containers (KVM-based lightweight VM)
+    Kata,
+    /// Firecracker microVM (standard/e2b/kata-fc)
+    Firecracker,
+    /// gVisor user-space kernel (runsc)
+    Gvisor,
+    /// QEMU/KVM full virtual machine
+    Vm,
+    /// Landlock LSM filesystem access control
+    Landlock,
 }
 
-// ===========================================================================
-// Sandbox
-// ===========================================================================
+impl std::fmt::Display for SandboxTarget {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Container => write!(f, "container"),
+            Self::Kata => write!(f, "kata"),
+            Self::Firecracker => write!(f, "firecracker"),
+            Self::Gvisor => write!(f, "gvisor"),
+            Self::Vm => write!(f, "vm"),
+            Self::Landlock => write!(f, "landlock"),
+        }
+    }
+}
 
 #[derive(Parser)]
 pub struct SandboxArgs {
@@ -76,25 +87,56 @@ pub struct SandboxArgs {
 
 #[derive(Subcommand)]
 pub enum SandboxCommands {
-    /// Install a sandbox scenario
+    /// Install a sandbox backend
     ///
-    /// Runs the 5-phase install pipeline:
-    /// Pre-flight → Packages → OS Primitives → Service → Verify
-    Install(SandboxInstallArgs),
+    /// Runs the 5-phase install pipeline: Pre-flight → Packages → OS Primitives → Service → Verify
+    Install {
+        /// Backend to install
+        target: SandboxTarget,
 
-    /// Remove a sandbox scenario
+        /// Variant selection (container: runc|rund; firecracker: standard|e2b|kata-fc)
+        #[arg(long)]
+        variant: Option<String>,
+
+        /// L2 runtime to register the engine into (gvisor: containerd|docker).
+        /// Firecracker rejects this flag (direct KVM access).
+        #[arg(long)]
+        runtime: Option<String>,
+
+        /// Control-panel data-plane overlay (gvisor: substrate).
+        /// Requires --runtime=containerd.
+        #[arg(long)]
+        control_panel: Option<String>,
+
+        /// Print install plan without executing
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Skip confirmation prompts (e.g. HugePages allocation)
+        #[arg(long)]
+        force: bool,
+
+        /// Skip post-install verification (Phase 5)
+        #[arg(long)]
+        no_verify: bool,
+    },
+
+    /// Remove a sandbox backend
     ///
-    /// Runs the reverse 3-phase pipeline:
-    /// Pre-check → Service Teardown → Cleanup
+    /// Runs the reverse 3-phase pipeline: Pre-check → Service Teardown → Cleanup
     Remove {
-        /// Scenario to remove
-        scenario: String,
+        /// Backend to remove
+        target: SandboxTarget,
+
+        /// Variant selection (container: runc|rund; firecracker: standard|e2b|kata-fc)
+        #[arg(long)]
+        variant: Option<String>,
 
         /// Also remove ANOLISA-written config files and data directories
         #[arg(long)]
         purge: bool,
 
-        /// Skip dependency checks (dangerous: may break dependent scenarios)
+        /// Skip dependency checks (dangerous: may break kata/firecracker/gvisor substrate)
         #[arg(long)]
         force: bool,
 
@@ -103,11 +145,11 @@ pub enum SandboxCommands {
         dry_run: bool,
     },
 
-    /// List all sandbox scenarios and their availability
+    /// List all sandbox backends and their availability
     ///
-    /// Performs real-time environment probing (does not read cache).
+    /// Performs real-time environment probing (does not read cache)
     List {
-        /// Only show scenarios whose gate conditions pass
+        /// Only show backends whose gate conditions pass
         #[arg(long)]
         available: bool,
 
@@ -116,12 +158,12 @@ pub enum SandboxCommands {
         json: bool,
     },
 
-    /// Show sandbox scenario status
+    /// Show sandbox backend status
     ///
-    /// Without scenario: summary of all scenarios. With scenario: detailed info.
+    /// Without target: summary of all backends. With target: detailed info.
     Status {
-        /// Specific scenario to query (omit for all)
-        scenario: Option<String>,
+        /// Specific backend to query (omit for all)
+        target: Option<SandboxTarget>,
 
         /// Output as structured JSON
         #[arg(long)]
@@ -129,40 +171,7 @@ pub enum SandboxCommands {
     },
 }
 
-#[derive(Args)]
-pub struct SandboxInstallArgs {
-    /// Sandbox scenario name (runc, rund, kata-fc, kata-clh, kata-qemu,
-    /// firecracker, gvisor, gvisor-substrate, landlock)
-    pub scenario: String,
-
-    /// Register containerd runtime handler ("containerd" | "none")
-    #[arg(long, default_value = "containerd")]
-    pub register_handler: String,
-
-    /// Additionally create a Kubernetes RuntimeClass resource
-    #[arg(long, default_value_t = false)]
-    pub register_runtimeclass: bool,
-
-    /// Custom kata config.toml override path
-    #[arg(long)]
-    pub config: Option<String>,
-
-    /// Set as default RuntimeClass after install
-    #[arg(long, default_value_t = false)]
-    pub default: bool,
-
-    /// Skip non-fatal preflight warnings
-    #[arg(long, default_value_t = false)]
-    pub force: bool,
-
-    /// Skip post-install smoke check
-    #[arg(long, default_value_t = false)]
-    pub no_verify: bool,
-}
-
-// ===========================================================================
-// Security
-// ===========================================================================
+// --- Security ---
 
 #[derive(Parser)]
 pub struct SecurityArgs {
@@ -185,98 +194,112 @@ pub enum SecurityCommands {
     Status { target: Option<String> },
 }
 
-// ===========================================================================
-// Dispatch
-// ===========================================================================
-
 pub fn handle(args: OsbaseArgs, ctx: &CliContext) -> Result<(), CliError> {
-    // osbase manipulates `/boot`, `/etc`, kernel modules and systemd
-    // units — every operation is implicitly system-mode. Rather than
-    // letting the request fail deep inside a 5-phase pipeline with a
-    // permission-denied IO error, gate it at the top with two
-    // pre-checks. The order is deliberate: reject `--install-mode=user`
-    // first (it's a stale flag from the user's command line, fixable
-    // without re-running with sudo) before we tell them to escalate.
-    osbase_preflight(ctx)?;
-
+    osbase_preflight()?;
     match args.command {
         OsbaseCommands::Sandbox(s) => handle_sandbox(s.command, ctx),
-        OsbaseCommands::Kernel(k) => handle_kernel(k.command, ctx),
-        OsbaseCommands::Security(s) => handle_security(s.command),
+        OsbaseCommands::Kernel(k) => {
+            let command = match k.command {
+                KernelCommands::Install { .. } => "osbase kernel install",
+                KernelCommands::Remove => "osbase kernel remove",
+                KernelCommands::Status => "osbase kernel status",
+            };
+            Err(CliError::not_implemented(command))
+        }
+        OsbaseCommands::Security(s) => {
+            let command = match s.command {
+                SecurityCommands::Install { target, .. } => {
+                    format!("osbase security install {target}")
+                }
+                SecurityCommands::Remove { target } => format!("osbase security remove {target}"),
+                SecurityCommands::Status { target } => match target {
+                    Some(t) => format!("osbase security status {t}"),
+                    None => "osbase security status".to_string(),
+                },
+            };
+            Err(CliError::not_implemented(command))
+        }
     }
-}
-
-/// Top-level guard for `anolisa osbase`: enforce system mode and root.
-///
-/// Both checks live in this dedicated helper so they can be unit-tested
-/// (the privilege probe is platform-agnostic via
-/// `anolisa_platform::privilege::is_root`) and so per-domain handlers
-/// don't need to repeat the boilerplate. `anolisa-core::validate_request`
-/// repeats the uid check defensively for callers that bypass the CLI
-/// layer (library use, tests).
-fn osbase_preflight(ctx: &CliContext) -> Result<(), CliError> {
-    if !matches!(ctx.install_mode, crate::context::InstallMode::System) {
-        return Err(CliError::PermissionDenied {
-            command: "osbase".to_string(),
-            reason: "osbase does not support --install-mode=user; \
-                 osbase only operates in system mode"
-                .to_string(),
-            hint: Some(
-                "drop --install-mode=user (or pass --install-mode=system) \
-                 and re-run with: sudo anolisa osbase ..."
-                    .to_string(),
-            ),
-        });
-    }
-
-    if !anolisa_platform::privilege::is_root() {
-        return Err(CliError::PermissionDenied {
-            command: "osbase".to_string(),
-            reason: "osbase requires root privileges (writes to /boot, \
-                 /etc, kernel modules, systemd units)"
-                .to_string(),
-            hint: Some("re-run with: sudo anolisa osbase ...".to_string()),
-        });
-    }
-
-    Ok(())
-}
-
-fn handle_kernel(command: KernelCommands, _ctx: &CliContext) -> Result<(), CliError> {
-    // Kernel domain is a stub in `osbase_install::execute_install` (Task #4);
-    // surface a stable not-implemented envelope until the dedicated pipeline
-    // lands. The clap layer has already validated the variant/version
-    // shape, so error context here can stay coarse.
-    let cmd = match command {
-        KernelCommands::Install(args) => format!("osbase kernel install {}", args.variant),
-        KernelCommands::Remove => "osbase kernel remove".to_string(),
-        KernelCommands::Status => "osbase kernel status".to_string(),
-    };
-    Err(CliError::not_implemented(cmd))
-}
-
-fn handle_security(command: SecurityCommands) -> Result<(), CliError> {
-    let cmd = match command {
-        SecurityCommands::Install { target, .. } => format!("osbase security install {target}"),
-        SecurityCommands::Remove { target } => format!("osbase security remove {target}"),
-        SecurityCommands::Status { target } => match target {
-            Some(t) => format!("osbase security status {t}"),
-            None => "osbase security status".to_string(),
-        },
-    };
-    Err(CliError::not_implemented(cmd))
 }
 
 fn handle_sandbox(command: SandboxCommands, ctx: &CliContext) -> Result<(), CliError> {
     match command {
-        SandboxCommands::Install(args) => handle_sandbox_install(args, ctx),
-        SandboxCommands::Remove { scenario, .. } => Err(CliError::not_implemented(format!(
-            "osbase sandbox remove {scenario}"
-        ))),
+        SandboxCommands::Install {
+            target,
+            variant,
+            runtime,
+            control_panel,
+            dry_run,
+            force,
+            no_verify,
+        } => {
+            let backend = sandbox_target_to_kind(&target);
+            let variant_str = variant.unwrap_or_else(|| backend.default_variant().to_string());
+
+            let request = SandboxInstallRequest {
+                backend,
+                variant: variant_str,
+                runtime,
+                control_panel,
+                dry_run: dry_run || ctx.dry_run,
+                force,
+                no_verify,
+                json: ctx.json,
+            };
+
+            let layout = resolve_layout(ctx);
+
+            // Dry-run: print plan and exit. Validate the backend/variant
+            // first so that an unknown variant fails loudly instead of
+            // returning a misleading "plan" the real install would reject.
+            if request.dry_run {
+                if let Err(e) = validate_request(&request) {
+                    return Err(map_sandbox_err(e, &request));
+                }
+                let plan = build_dry_run_plan(&request);
+                if ctx.json {
+                    return response::render_json(
+                        &format!(
+                            "osbase sandbox install {} --variant={}",
+                            request.backend, request.variant
+                        ),
+                        &plan,
+                    );
+                }
+                println!(
+                    "Install plan for: {} (variant={})",
+                    plan.backend, plan.variant
+                );
+                println!();
+                for phase in &plan.phases {
+                    println!("Phase {}: {}", phase_number(phase.phase), phase.phase);
+                    for action in &phase.actions {
+                        println!("  - {action}");
+                    }
+                    println!();
+                }
+                return Ok(());
+            }
+
+            // Execute real install
+            match execute_sandbox_install(&request, &layout) {
+                Ok(outcome) => render_install_outcome(ctx, &outcome),
+                Err(err) => Err(map_sandbox_err(err, &request)),
+            }
+        }
+        SandboxCommands::Remove {
+            target, variant, ..
+        } => {
+            let cmd = match variant {
+                Some(v) => format!("osbase sandbox remove {target} --variant={v}"),
+                None => format!("osbase sandbox remove {target}"),
+            };
+            Err(CliError::not_implemented(cmd))
+        }
         SandboxCommands::List { .. } => Err(CliError::not_implemented("osbase sandbox list")),
-        SandboxCommands::Status { scenario, .. } => {
-            let cmd = match scenario {
-                Some(s) => format!("osbase sandbox status {s}"),
+        SandboxCommands::Status { target, .. } => {
+            let cmd = match target {
+                Some(t) => format!("osbase sandbox status {t}"),
                 None => "osbase sandbox status".to_string(),
             };
             Err(CliError::not_implemented(cmd))
@@ -284,84 +307,79 @@ fn handle_sandbox(command: SandboxCommands, ctx: &CliContext) -> Result<(), CliE
     }
 }
 
-fn handle_sandbox_install(args: SandboxInstallArgs, ctx: &CliContext) -> Result<(), CliError> {
-    let cmd = format!("osbase sandbox install {}", args.scenario);
+// ===========================================================================
+// Preflight
+// ===========================================================================
 
-    // System-mode + root were already enforced by `osbase_preflight` at
-    // the top-level dispatcher; no need to re-check here. Keeping the
-    // guard at exactly one place avoids drift between osbase verbs
-    // (kernel install / security install / sandbox install would all
-    // need the same policy otherwise).
-
-    let register_handler = match args.register_handler.as_str() {
-        "containerd" => RegisterHandler::Containerd,
-        "none" => RegisterHandler::None,
-        other => {
-            return Err(CliError::InvalidArgument {
-                command: cmd,
-                reason: format!(
-                    "--register-handler must be 'containerd' or 'none' (got '{other}')"
-                ),
-            });
-        }
-    };
-
-    let request = OsbaseInstallRequest {
-        domain: OsbaseDomain::Sandbox,
-        target: args.scenario.clone(),
-        register_handler,
-        register_runtimeclass: args.register_runtimeclass,
-        config_override: args.config.clone(),
-        set_default: args.default,
-        force: args.force,
-        skip_verify: args.no_verify,
-        dry_run: ctx.dry_run,
-    };
-
-    let env = anolisa_env::EnvService::detect();
-
-    match execute_install(&request, &env) {
-        Ok(outcome) => render_install_outcome(ctx, &outcome),
-        Err(err) => Err(map_osbase_err(err, &cmd)),
+/// osbase operates exclusively in system mode — it writes to /etc, /var/lib,
+/// /usr/lib and enables systemd units.  Instead of inspecting the global
+/// `--install-mode` flag (whose default is `user` for most anolisa commands),
+/// we simply require euid==0.  The `--install-mode=user` rejection is handled
+/// at the clap layer: osbase subcommands do not accept that flag.
+fn osbase_preflight() -> Result<(), CliError> {
+    if !privilege::is_root() {
+        return Err(CliError::PermissionDenied {
+            command: "osbase".to_string(),
+            reason: "osbase only operates in system mode and requires root privileges".to_string(),
+            hint: Some("re-run with: sudo anolisa osbase ...".to_string()),
+        });
     }
+    Ok(())
 }
 
 // ===========================================================================
-// Outcome / error rendering
+// Helpers
 // ===========================================================================
+
+fn sandbox_target_to_kind(target: &SandboxTarget) -> SandboxBackendKind {
+    match target {
+        SandboxTarget::Container => SandboxBackendKind::Container,
+        SandboxTarget::Kata => SandboxBackendKind::Kata,
+        SandboxTarget::Firecracker => SandboxBackendKind::Firecracker,
+        SandboxTarget::Gvisor => SandboxBackendKind::Gvisor,
+        SandboxTarget::Vm => SandboxBackendKind::Vm,
+        SandboxTarget::Landlock => SandboxBackendKind::Landlock,
+    }
+}
+
+fn resolve_layout(ctx: &CliContext) -> FsLayout {
+    // osbase is inherently system-scoped; ignore ctx.install_mode which
+    // defaults to User for the rest of the CLI.
+    FsLayout::system(ctx.prefix.clone())
+}
 
 fn render_install_outcome(
     ctx: &CliContext,
-    outcome: &OsbaseInstallOutcome,
+    outcome: &SandboxInstallOutcome,
 ) -> Result<(), CliError> {
     let cmd = format!(
-        "osbase {} install {}",
-        outcome.domain.as_str(),
-        outcome.target
+        "osbase sandbox install {} --variant={}",
+        outcome.backend, outcome.variant
     );
 
     // For non-zero outcomes (degraded / failed) the JSON envelope must
     // carry ok=false so machine callers don't see a success envelope
     // contradicting the non-zero exit code. Build the CliError up front
     // and let `render_error` (called by main on Err) emit the error
-    // envelope on the JSON path.
+    // envelope on the JSON path. Phase details are still discoverable
+    // via the central audit log; we keep the envelope shape consistent
+    // with other commands instead of inventing a degraded JSON variant.
     let outcome_err: Option<CliError> = match outcome.exit_code {
         0 => None,
         2 => Some(CliError::Degraded {
             command: cmd.clone(),
             reason: format!(
-                "{} scenario '{}' installed with warnings",
-                outcome.domain.as_str(),
-                outcome.target
+                "sandbox backend '{}' (variant={}) installed with warnings",
+                outcome.backend, outcome.variant
             ),
         }),
+        // Phase-level Failed (3) or any other non-zero code: surface
+        // as runtime failure so callers see exit 1.
         _ => Some(CliError::Runtime {
             command: cmd.clone(),
             reason: format!(
-                "{} scenario '{}' install failed (exit_code={})",
-                outcome.domain.as_str(),
-                outcome.target,
-                outcome.exit_code
+                "sandbox backend '{}' (variant={}) install failed (exit_code={})",
+                outcome.backend, outcome.variant, outcome.exit_code
             ),
         }),
     };
@@ -370,40 +388,38 @@ fn render_install_outcome(
         if let Some(err) = outcome_err {
             return Err(err);
         }
-        return response::render_json(&cmd, outcome_to_json(outcome));
+        return response::render_json(&cmd, outcome);
     }
 
+    // Human-readable output
     for (i, phase) in outcome.phases.iter().enumerate() {
         let icon = match phase.status {
-            OsbasePhaseStatus::Success => "\u{2713}",
-            OsbasePhaseStatus::Skipped => "\u{2298}",
-            OsbasePhaseStatus::Degraded => "\u{26A0}",
-            OsbasePhaseStatus::Failed => "\u{2717}",
+            PhaseStatus::Success => "\u{2713}",
+            PhaseStatus::Skipped => "\u{2298}",
+            PhaseStatus::Warning => "\u{26A0}",
+            PhaseStatus::Failed => "\u{2717}",
         };
-        let phase_name = format!("{:<14}", phase.name);
-        let msg = phase.message.as_deref().unwrap_or("");
+        let phase_name = format!("{:<10}", phase.phase.to_string());
         println!(
             "[{}/{}] {} {}  ({})",
             i + 1,
             outcome.phases.len(),
             phase_name,
             icon,
-            msg
+            phase.message
         );
     }
     println!();
 
     if outcome.exit_code == 0 {
         println!(
-            "{} scenario '{}' installed successfully.",
-            outcome.domain.as_str(),
-            outcome.target
+            "sandbox backend '{}' (variant={}) installed successfully.",
+            outcome.backend, outcome.variant
         );
     } else if outcome.exit_code == 2 {
         println!(
-            "{} scenario '{}' installed with warnings (degraded).",
-            outcome.domain.as_str(),
-            outcome.target
+            "sandbox backend '{}' (variant={}) installed with warnings (degraded).",
+            outcome.backend, outcome.variant
         );
     }
 
@@ -414,53 +430,42 @@ fn render_install_outcome(
         }
     }
 
-    // Surface non-zero exit_code to the process exit. Without this, an
-    // Ok(outcome) carrying exit_code=2/3 would mask degraded installs
-    // from CI / scripts that only inspect $?.
+    // Surface non-zero outcome.exit_code to the process exit. The
+    // 5-phase pipeline returns Ok(outcome) even when phases emit
+    // Warning / Failed (those are encoded as exit_code 2 / 3 inside
+    // the outcome). Without this conversion the process always exits
+    // 0 on Ok(outcome), masking degraded installs from CI / scripts.
     match outcome_err {
         None => Ok(()),
         Some(err) => Err(err),
     }
 }
 
-fn outcome_to_json(outcome: &OsbaseInstallOutcome) -> serde_json::Value {
-    let phases: Vec<serde_json::Value> = outcome
-        .phases
-        .iter()
-        .map(|p| {
-            serde_json::json!({
-                "name": p.name,
-                "status": match p.status {
-                    OsbasePhaseStatus::Success => "success",
-                    OsbasePhaseStatus::Skipped => "skipped",
-                    OsbasePhaseStatus::Degraded => "degraded",
-                    OsbasePhaseStatus::Failed => "failed",
-                },
-                "message": p.message,
-                "duration_ms": p.duration_ms,
-            })
-        })
-        .collect();
-    serde_json::json!({
-        "domain": outcome.domain.as_str(),
-        "target": outcome.target,
-        "exit_code": outcome.exit_code,
-        "phases": phases,
-        "warnings": outcome.warnings,
-    })
-}
-
-fn map_osbase_err(err: OsbaseInstallError, command: &str) -> CliError {
+fn map_sandbox_err(err: SandboxInstallError, request: &SandboxInstallRequest) -> CliError {
+    let command = format!(
+        "osbase sandbox install {} --variant={}",
+        request.backend, request.variant
+    );
     match &err {
-        OsbaseInstallError::Unsupported(_) | OsbaseInstallError::InvalidRequest { .. } => {
-            CliError::InvalidArgument {
-                command: command.to_string(),
-                reason: err.to_string(),
-            }
-        }
-        OsbaseInstallError::PhaseFailed { .. } | OsbaseInstallError::Io(_) => CliError::Runtime {
-            command: command.to_string(),
+        SandboxInstallError::EnvNotSatisfied { .. }
+        | SandboxInstallError::Unsupported { .. }
+        | SandboxInstallError::NotRoot => CliError::InvalidArgument {
+            command,
             reason: err.to_string(),
         },
+        _ => CliError::Runtime {
+            command,
+            reason: err.to_string(),
+        },
+    }
+}
+
+fn phase_number(phase: InstallPhase) -> u8 {
+    match phase {
+        InstallPhase::Preflight => 1,
+        InstallPhase::Packages => 2,
+        InstallPhase::OsPrimitives => 3,
+        InstallPhase::ServiceSetup => 4,
+        InstallPhase::PostVerify => 5,
     }
 }

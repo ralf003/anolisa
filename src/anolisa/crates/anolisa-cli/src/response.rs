@@ -87,6 +87,16 @@ pub enum CliError {
     #[error("degraded: {reason}")]
     Degraded { command: String, reason: String },
 
+    /// The command requires elevated privileges that the process lacks.
+    /// Maps to exit code 5 so callers can distinguish permission issues
+    /// from other failures.
+    #[error("permission denied: {reason}")]
+    PermissionDenied {
+        command: String,
+        reason: String,
+        hint: Option<String>,
+    },
+
     /// Batch command (e.g. `install --all`) finished with one or more
     /// component failures. The handler has **already** rendered the
     /// batch summary to stdout (human text or JSON envelope). This
@@ -118,6 +128,7 @@ impl CliError {
             Self::InvalidArgument { .. } => "INVALID_ARGUMENT",
             Self::Runtime { .. } => "EXECUTION_FAILED",
             Self::Degraded { .. } => "DEGRADED",
+            Self::PermissionDenied { .. } => "PERMISSION_DENIED",
             Self::BatchPartial { .. } => "BATCH_PARTIAL",
             Self::PermissionDenied { .. } => "PERMISSION_DENIED",
         }
@@ -129,6 +140,7 @@ impl CliError {
             Self::InvalidArgument { .. } => 2,
             Self::Runtime { .. } => 1,
             Self::Degraded { .. } => 2,
+            Self::PermissionDenied { .. } => 5,
             Self::BatchPartial { .. } => 1,
             // 5 = "user-mode rejected / insufficient privileges" per
             // osbase-cli-redesign.md EXIT STATUS; covers both
@@ -145,6 +157,7 @@ impl CliError {
             Self::InvalidArgument { command, .. } => command,
             Self::Runtime { command, .. } => command,
             Self::Degraded { command, .. } => command,
+            Self::PermissionDenied { command, .. } => command,
             Self::BatchPartial { command } => command,
             Self::PermissionDenied { command, .. } => command,
         }
@@ -156,6 +169,7 @@ impl CliError {
             Self::InvalidArgument { .. } => None,
             Self::Runtime { .. } => None,
             Self::Degraded { .. } => None,
+            Self::PermissionDenied { hint, .. } => hint.as_deref(),
             Self::BatchPartial { .. } => None,
             Self::PermissionDenied { hint, .. } => hint.as_deref(),
         }
@@ -169,6 +183,7 @@ impl CliError {
             Self::InvalidArgument { reason, .. } => reason.clone(),
             Self::Runtime { reason, .. } => reason.clone(),
             Self::Degraded { reason, .. } => reason.clone(),
+            Self::PermissionDenied { reason, .. } => reason.clone(),
             Self::BatchPartial { .. } => "batch completed with failures".to_string(),
             Self::PermissionDenied { reason, .. } => reason.clone(),
         }
