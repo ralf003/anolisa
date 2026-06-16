@@ -93,6 +93,16 @@ pub(crate) const ANOLISA_SANDBOX_REPO_ID: &str = "anolisa-sandbox";
 pub(crate) const SANDBOX_RPM_PACKAGING_DOC: &str =
     "ANOLISA-design/docs/anolisa/osbase/sandbox/sandbox-rpm-packaging.md";
 
+// TODO(§9.2): Read from manifest [scenario_defaults.binary_paths] section
+// once manifest v2 loading is integrated into the install pipeline.
+// Currently these are compile-time defaults matching RPM %files layout.
+//
+// Default paths for binaries that are not expected to be in PATH.
+// These should eventually be read from manifest [scenario_defaults.binary_paths].
+const SHIM_RUNSC_PATH: &str = "/usr/bin/containerd-shim-runsc-v1";
+const ATELET_PATH: &str = "/usr/local/bin/atelet";
+const ATEOM_GVISOR_PATH: &str = "/usr/local/bin/ateom-gvisor";
+
 /// Probe whether a package is *available* in any configured dnf repository
 /// (without installing it). Returns:
 /// - `Some(true)`  — package is in a repo and dnf is functioning
@@ -2333,7 +2343,7 @@ fn gvisor_verify(
     if request.runtime.as_deref() == Some("containerd")
         || request.control_panel.as_deref() == Some("substrate")
     {
-        let shim_path = Path::new("/usr/bin/containerd-shim-runsc-v1");
+        let shim_path = Path::new(SHIM_RUNSC_PATH);
         let cfg_path = Path::new("/etc/containerd/config.toml");
         let shim_ok = shim_path.exists();
         let cfg_ok = std::fs::read_to_string(cfg_path)
@@ -2341,9 +2351,9 @@ fn gvisor_verify(
             .unwrap_or(false);
         match (shim_ok, cfg_ok) {
             (true, true) => msg_parts.push("runsc containerd handler registered".to_string()),
-            (false, _) => warnings.push(
-                "/usr/bin/containerd-shim-runsc-v1 missing; runsc shim not installed".to_string(),
-            ),
+            (false, _) => warnings.push(format!(
+                "{SHIM_RUNSC_PATH} missing; runsc shim not installed"
+            )),
             (true, false) => warnings.push(
                 "/etc/containerd/config.toml missing io.containerd.runsc.v1 runtime entry"
                     .to_string(),
@@ -2353,7 +2363,7 @@ fn gvisor_verify(
 
     // Substrate: verify binaries + directories
     if request.control_panel.as_deref() == Some("substrate") {
-        for bin in &["/usr/local/bin/atelet", "/usr/local/bin/ateom-gvisor"] {
+        for bin in &[ATELET_PATH, ATEOM_GVISOR_PATH] {
             if !Path::new(bin).exists() {
                 warnings.push(format!("{bin} not found after install"));
             }
