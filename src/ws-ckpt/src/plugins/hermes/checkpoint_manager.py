@@ -8,11 +8,13 @@ and returns structured results.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from .config import HermesPluginConfig, MSG_TRUNCATE_LEN
+from .config import HermesPluginConfig, MSG_TRUNCATE_LEN, load_config
 
 DEFAULT_TIMEOUT_S = 30
 
@@ -200,3 +202,42 @@ class CheckpointManager:
             message=f"Checkpoint created: {snapshot_id}",
             snapshot=snapshot_id,
         )
+
+
+# ---------------------------------------------------------------------------
+# Singleton & workspace helpers (shared by __init__ and tools)
+# ---------------------------------------------------------------------------
+
+_manager: Optional[CheckpointManager] = None
+
+
+def get_manager() -> CheckpointManager:
+    """Return (or create) the singleton CheckpointManager."""
+    global _manager
+    if _manager is None:
+        config = load_config()
+        _manager = CheckpointManager(config)
+        print("[ws-ckpt] Plugin initialized", flush=True)
+    return _manager
+
+
+def cwd_inside_workspace(workspace: str) -> tuple[bool, str]:
+    """Return (inside, cwd) — whether the current cwd is the workspace or a descendant."""
+    try:
+        cwd = Path(os.getcwd()).resolve()
+    except (FileNotFoundError, OSError):
+        return False, ""
+    try:
+        ws_path = Path(workspace).resolve()
+    except (FileNotFoundError, OSError):
+        return False, str(cwd)
+    return cwd == ws_path or ws_path in cwd.parents, str(cwd)
+
+
+def cwd_inside_workspace_reason(cwd: str, workspace: str) -> str:
+    return (
+        f"Refused: cwd={cwd} is inside workspace={workspace}. "
+        "ws-ckpt replaces the workspace inode during init/checkpoint/rollback, "
+        "which would invalidate the process cwd. "
+        "The user must launch the session from outside the workspace directory."
+    )

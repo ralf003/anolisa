@@ -13,65 +13,22 @@ call, which is per-turn (one user message), not per-session.
 
 from __future__ import annotations
 
-import os
 import secrets
 import threading
 from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
-from .checkpoint_manager import CheckpointManager
-from .config import MSG_TRUNCATE_LEN, load_config
+from .config import MSG_TRUNCATE_LEN
+from .cron import CrontabManager
+from .checkpoint_manager import cwd_inside_workspace, cwd_inside_workspace_reason, get_manager
 from .tools import TOOLS, check_ws_ckpt_available
 
 # ---------------------------------------------------------------------------
 # Module-level state
 # ---------------------------------------------------------------------------
 
-_manager: Optional[CheckpointManager] = None
 _last_user_message: str = ""
 _msg_lock = threading.Lock()
-
-
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
-
-
-def _get_manager() -> CheckpointManager:
-    """Return (or create) the singleton CheckpointManager."""
-    global _manager
-    if _manager is None:
-        config = load_config()
-        _manager = CheckpointManager(config)
-        print("[ws-ckpt] Plugin initialized", flush=True)
-    return _manager
-
-
-# init/checkpoint/rollback all swap the workspace inode (remove_dir_all → btrfs
-# subvolume symlink, then later snapshot/rollback recreates it), so any process
-# holding cwd inside the workspace will get ENOENT on the next getcwd(). Refuse
-# instead of silently producing broken state.
-def _cwd_inside_workspace_reason(cwd: str, workspace: str) -> str:
-    return (
-        f"Refused: cwd={cwd} is inside workspace={workspace}. "
-        "ws-ckpt replaces the workspace inode during init/checkpoint/rollback, "
-        "which would invalidate the process cwd. "
-        "The user must launch the session from outside the workspace directory."
-    )
-
-
-def _cwd_inside_workspace(workspace: str) -> tuple[bool, str]:
-    """Return (inside, cwd) — whether the current cwd is the workspace or a descendant."""
-    try:
-        cwd = Path(os.getcwd()).resolve()
-    except (FileNotFoundError, OSError):
-        return False, ""
-    try:
-        ws_path = Path(workspace).resolve()
-    except (FileNotFoundError, OSError):
-        return False, str(cwd)
-    return cwd == ws_path or ws_path in cwd.parents, str(cwd)
 
 
 # ---------------------------------------------------------------------------
@@ -81,7 +38,20 @@ def _cwd_inside_workspace(workspace: str) -> tuple[bool, str]:
 
 def _on_session_start(session_id: str = "", model: str = "", **_: Any) -> None:
     """Handle on_session_start — init the workspace then create a baseline checkpoint."""
-    manager = _get_manager()
+    manager = get_manager()
+
+    # Sync cron schedules — independent of autoCheckpoint
+    ws = manager.config.workspace
+    if ws:
+        schedules = manager.config.cron_schedules.get(ws, [])
+        if schedules:
+            try:
+                if CrontabManager.sync_with_retry(ws, schedules):
+                    print(f"[ws-ckpt] Cron synced: {len(schedules)} schedule(s)", flush=True)
+                else:
+                    print("[ws-ckpt] Cron sync failed after 3 attempts", flush=True)
+            except Exception as e:
+                print(f"[ws-ckpt] Cron sync error: {e}", flush=True)
 
     if not manager.config.auto_checkpoint:
         return
@@ -94,11 +64,11 @@ def _on_session_start(session_id: str = "", model: str = "", **_: Any) -> None:
         )
         return
 
-    inside, cwd = _cwd_inside_workspace(manager.config.workspace)
+    inside, cwd = cwd_inside_workspace(manager.config.workspace)
     if inside:
         manager.set_auto_checkpoint(False)
         print(
-            f"[ws-ckpt] Refusing auto-checkpoint: {_cwd_inside_workspace_reason(cwd, manager.config.workspace)}",
+            f"[ws-ckpt] Refusing auto-checkpoint: {cwd_inside_workspace_reason(cwd, manager.config.workspace)}",
             flush=True,
         )
         return
@@ -153,7 +123,7 @@ def _on_session_end(
     **_: Any,
 ) -> None:
     """Handle on_session_end — create a checkpoint after the turn."""
-    manager = _get_manager()
+    manager = get_manager()
 
     if not manager.config.auto_checkpoint:
         return

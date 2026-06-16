@@ -35,6 +35,11 @@ export function registerTools(api: OpenClawPluginApi): void {
         "workspace (default workspace absolute path; used by every command without -w. " +
         "If the path is a symlink, use the link itself — do NOT replace it with the " +
         "resolved real path; the daemon registers and matches by the exact string you pass), " +
+        "cronSchedules (scheduled cron snapshots using standard 5-field cron expressions; " +
+        "value format: 'add \"CRON_EXPR\"', 'remove \"CRON_EXPR\"', or 'set [\"CRON_EXPR\"]'; " +
+        "operates on the current workspace; " +
+        "if the user's scheduling intent cannot be exactly expressed as a cron expression, " +
+        "do NOT write an approximate/degraded schedule — present the closest option and await confirmation), " +
         "maxSnapshotsNum (number of snapshots to keep when auto-cleanup is by count), " +
         "maxSnapshotsDuration (duration to keep when auto-cleanup is by time, e.g. \"7d\"/\"24h\"). " +
         "Only update the specific key requested by the user.",
@@ -48,7 +53,7 @@ export function registerTools(api: OpenClawPluginApi): void {
           key: {
             type: "string",
             description:
-              "Config key to update: autoCheckpoint, workspace, maxSnapshotsNum, maxSnapshotsDuration",
+              "Config key to update: autoCheckpoint, workspace, cronSchedules, maxSnapshotsNum, maxSnapshotsDuration",
           },
           value: {
             type: "string",
@@ -56,6 +61,7 @@ export function registerTools(api: OpenClawPluginApi): void {
               "New value as a string. Formats: " +
               "autoCheckpoint = \"true\"/\"false\"; " +
               "workspace = absolute path; " +
+              "cronSchedules = 'add \"CRON_EXPR\"' / 'remove \"CRON_EXPR\"' / 'set [\"CRON_EXPR\"]'; " +
               "maxSnapshotsNum = positive integer (or \"unset\" to restore inherit-global); " +
               "maxSnapshotsDuration = e.g. \"7d\"/\"24h\" (or \"unset\" to restore inherit-global).",
           },

@@ -7,6 +7,9 @@
  */
 
 import { execFile } from "child_process";
+import { writeFileSync, unlinkSync, mkdtempSync, rmdirSync } from "fs";
+import { join } from "path";
+import { tmpdir } from "os";
 import { promisify } from "util";
 import type { CommandOutput } from "./types.js";
 import { pluginState } from "./state.js";
@@ -272,5 +275,65 @@ export class CommandExecutor {
         stderr: err.stderr ?? err.message ?? "Unknown command error",
       };
     }
+  }
+
+}
+
+/**
+ * Execute a crontab command. Returns structured output, never throws.
+ * When input is provided, writes to a temp file and runs `crontab <file>`
+ * instead of stdin — execFile does not support the input option.
+ */
+export async function runCrontab(
+  args: string[],
+  opts?: { input?: string; timeout?: number },
+): Promise<CommandOutput> {
+  const timeout = opts?.timeout ?? 10_000;
+
+  if (opts?.input !== undefined) {
+    const tmpDir = mkdtempSync(join(tmpdir(), "ws-ckpt-cron-"));
+    const tmpFile = join(tmpDir, "crontab");
+    try {
+      writeFileSync(tmpFile, opts.input, "utf-8");
+      const { stdout, stderr } = await execFileAsync("crontab", [tmpFile], {
+        timeout,
+        encoding: "utf-8",
+      });
+      return { exitCode: 0, stdout: String(stdout ?? ""), stderr: String(stderr ?? "") };
+    } catch (error: unknown) {
+      const err = error as {
+        code?: number | string;
+        stdout?: string;
+        stderr?: string;
+        message?: string;
+      };
+      return {
+        exitCode: typeof err.code === "number" ? err.code : 1,
+        stdout: err.stdout ?? "",
+        stderr: err.stderr ?? err.message ?? "Unknown command error",
+      };
+    } finally {
+      try { unlinkSync(tmpFile); rmdirSync(tmpDir); } catch { /* cleanup best-effort */ }
+    }
+  }
+
+  try {
+    const { stdout, stderr } = await execFileAsync("crontab", args, {
+      timeout,
+      encoding: "utf-8",
+    });
+    return { exitCode: 0, stdout: String(stdout ?? ""), stderr: String(stderr ?? "") };
+  } catch (error: unknown) {
+    const err = error as {
+      code?: number | string;
+      stdout?: string;
+      stderr?: string;
+      message?: string;
+    };
+    return {
+      exitCode: typeof err.code === "number" ? err.code : 1,
+      stdout: err.stdout ?? "",
+      stderr: err.stderr ?? err.message ?? "Unknown command error",
+    };
   }
 }

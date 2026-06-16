@@ -14,6 +14,7 @@ import { PluginConfigManager } from "./config.js";
 import { EnvironmentChecker } from "./environment-check.js";
 import { BtrfsManager } from "./btrfs-manager.js";
 import type { PluginConfig } from "./types.js";
+import { loadPersistedConfig } from "./persist.js";
 import {
   definePluginEntry,
   type OpenClawPluginApi,
@@ -38,14 +39,11 @@ import { ensureToolsAlsoAllow } from "./whitelist.js";
  */
 function register(api: OpenClawPluginApi): void {
   pluginState.pluginApi = api;
-  const rawConfig = api.pluginConfig ?? {};
 
   // ------------------------------------------------------------------
   // 1. Load and validate configuration
   // ------------------------------------------------------------------
-  const configManager = new PluginConfigManager(
-    rawConfig as Partial<PluginConfig>,
-  );
+  const configManager = new PluginConfigManager(loadPersistedConfig());
   const validation = configManager.validate();
   // Keep object identity stable across reloads so stale hook closures stay live.
   const fresh = configManager.getConfig();
@@ -146,8 +144,10 @@ export { register };
 // Re-export components for external consumers
 export { BtrfsManager } from "./btrfs-manager.js";
 export { CommandExecutor } from "./commands.js";
+export { CrontabManager } from "./cron.js";
 export { SnapshotStore } from "./snapshot-store.js";
 export { PluginConfigManager, DEFAULT_CONFIG } from "./config.js";
+export { loadPersistedConfig, persistConfig } from "./persist.js";
 export { EnvironmentChecker } from "./environment-check.js";
 export type {
   PluginConfig,
