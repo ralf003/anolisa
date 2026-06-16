@@ -20,6 +20,7 @@ pub mod integrity;
 pub mod lifecycle;
 pub mod lock;
 pub mod manifest;
+pub mod osbase_install;
 pub mod path_safety;
 pub mod process;
 pub mod register;
@@ -28,6 +29,7 @@ pub mod sandbox_install;
 pub mod self_update;
 pub mod service;
 pub mod state;
+pub mod support_matrix;
 pub mod transaction;
 pub mod upload;
 
@@ -67,6 +69,11 @@ pub use lifecycle::{
 };
 pub use lock::{InstallLock, LockError};
 pub use manifest::{AdapterSpec, ComponentManifest, DistributionSelector, FileKind, HealthSpec};
+pub use osbase_install::{
+    OsbaseDomain, OsbaseInstallError, OsbaseInstallOutcome, OsbaseInstallRequest,
+    PhaseResult as OsbasePhaseResult, PhaseStatus as OsbasePhaseStatus, RegisterHandler,
+    execute_install,
+};
 pub use register::{
     ConsentState, ProductType, RegisterRecord, RegisterSource, RegisterState, RegistrationManager,
     SubscriptionError, current_operator, require_root,
