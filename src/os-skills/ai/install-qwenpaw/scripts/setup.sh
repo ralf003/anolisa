@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# CoPaw 一键安装部署脚本
+# QwenPaw 一键安装部署脚本
 # 用法: bash setup.sh <百炼API_KEY> <钉钉CLIENT_ID> <钉钉CLIENT_SECRET> [模型名称]
 #
 # 示例:
@@ -34,11 +34,11 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILL_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-COPAW_DIR="$HOME/.copaw"
-SECRET_DIR="$HOME/.copaw.secret"
+QWENPAW_DIR="$HOME/.qwenpaw"
+SECRET_DIR="$HOME/.qwenpaw.secret"
 
 echo "=============================="
-echo " CoPaw 安装部署"
+echo " QwenPaw 安装部署"
 echo "=============================="
 echo "百炼 API Key:  ${DASHSCOPE_API_KEY:0:8}..."
 echo "钉钉 Client ID: ${DINGTALK_CLIENT_ID:0:8}..."
@@ -55,25 +55,25 @@ else
   echo "  uv 安装完成: $(uv --version 2>/dev/null)"
 fi
 
-# ── 步骤 2: 安装 CoPaw ──────────────────────────────────
-echo "[2/6] 安装 CoPaw..."
-if command -v copaw &>/dev/null; then
-  echo "  copaw 已安装: $(copaw --version 2>/dev/null || echo '未知版本')"
+# ── 步骤 2: 安装 QwenPaw ──────────────────────────────────
+echo "[2/6] 安装 QwenPaw..."
+if command -v qwenpaw &>/dev/null; then
+  echo "  qwenpaw 已安装: $(qwenpaw --version 2>/dev/null || echo '未知版本')"
 else
-  curl -fsSL https://copaw.agentscope.io/install.sh | bash
-  export PATH="$HOME/.copaw/bin:$PATH"
+  curl -fsSL https://qwenpaw.agentscope.io/install.sh | bash
+  export PATH="$HOME/.qwenpaw/bin:$PATH"
   # 写入 bashrc（如果还没有的话）
-  if ! grep -q '.copaw/bin' "$HOME/.bashrc" 2>/dev/null; then
-    echo 'export PATH="$HOME/.copaw/bin:$PATH"' >> "$HOME/.bashrc"
+  if ! grep -q '.qwenpaw/bin' "$HOME/.bashrc" 2>/dev/null; then
+    echo 'export PATH="$HOME/.qwenpaw/bin:$PATH"' >> "$HOME/.bashrc"
   fi
-  echo "  安装完成: $(copaw --version 2>/dev/null || echo '请重新打开终端')"
+  echo "  安装完成: $(qwenpaw --version 2>/dev/null || echo '请重新打开终端')"
 fi
 
 # ── 步骤 3: 创建目录结构 ──────────────────────────────────
 echo "[3/6] 创建目录结构..."
-mkdir -p "$COPAW_DIR/media"
-mkdir -p "$COPAW_DIR/active_skills"
-mkdir -p "$COPAW_DIR/customized_skills"
+mkdir -p "$QWENPAW_DIR/media"
+mkdir -p "$QWENPAW_DIR/active_skills"
+mkdir -p "$QWENPAW_DIR/customized_skills"
 mkdir -p "$SECRET_DIR/providers/builtin"
 mkdir -p "$SECRET_DIR/providers/custom"
 chmod 700 "$SECRET_DIR" "$SECRET_DIR/providers" "$SECRET_DIR/providers/builtin" "$SECRET_DIR/providers/custom"
@@ -91,7 +91,7 @@ fi
 sed \
   -e "s|{DINGTALK_CLIENT_ID}|${DINGTALK_CLIENT_ID}|g" \
   -e "s|{DINGTALK_CLIENT_SECRET}|${DINGTALK_CLIENT_SECRET}|g" \
-  "$CONFIG_TEMPLATE" > "$COPAW_DIR/config.json"
+  "$CONFIG_TEMPLATE" > "$QWENPAW_DIR/config.json"
 echo "  config.json 已写入"
 
 # 3b: dashscope.json — 百炼提供商
@@ -116,11 +116,11 @@ sed "s|{MODEL_NAME}|${MODEL_NAME}|g" \
 chmod 600 "$SECRET_DIR/providers/active_model.json"
 echo "  active_model.json 已写入"
 
-# 3d: Markdown 文件 — 复制到 ~/.copaw/
+# 3d: Markdown 文件 — 复制到 ~/.qwenpaw/
 for md_file in AGENTS.md SOUL.md PROFILE.md MEMORY.md BOOTSTRAP.md HEARTBEAT.md; do
   src="$SKILL_DIR/reference/$md_file"
   if [ -f "$src" ]; then
-    cp "$src" "$COPAW_DIR/$md_file"
+    cp "$src" "$QWENPAW_DIR/$md_file"
   else
     echo "  警告: 找不到 $src，跳过"
   fi
@@ -131,15 +131,15 @@ echo "  Markdown 文件已复制"
 echo "[5/6] 验证文件完整性..."
 ALL_OK=true
 for f in \
-  "$COPAW_DIR/config.json" \
+  "$QWENPAW_DIR/config.json" \
   "$SECRET_DIR/providers/builtin/dashscope.json" \
   "$SECRET_DIR/providers/active_model.json" \
-  "$COPAW_DIR/AGENTS.md" \
-  "$COPAW_DIR/SOUL.md" \
-  "$COPAW_DIR/PROFILE.md" \
-  "$COPAW_DIR/MEMORY.md" \
-  "$COPAW_DIR/BOOTSTRAP.md" \
-  "$COPAW_DIR/HEARTBEAT.md"; do
+  "$QWENPAW_DIR/AGENTS.md" \
+  "$QWENPAW_DIR/SOUL.md" \
+  "$QWENPAW_DIR/PROFILE.md" \
+  "$QWENPAW_DIR/MEMORY.md" \
+  "$QWENPAW_DIR/BOOTSTRAP.md" \
+  "$QWENPAW_DIR/HEARTBEAT.md"; do
   if [ -f "$f" ]; then
     echo "  OK: $f"
   else
@@ -149,7 +149,7 @@ for f in \
 done
 
 # 验证 JSON 合法性
-for jf in "$COPAW_DIR/config.json" "$SECRET_DIR/providers/builtin/dashscope.json" "$SECRET_DIR/providers/active_model.json"; do
+for jf in "$QWENPAW_DIR/config.json" "$SECRET_DIR/providers/builtin/dashscope.json" "$SECRET_DIR/providers/active_model.json"; do
   if python3 -c "import json; json.load(open('$jf'))" 2>/dev/null; then
     echo "  JSON OK: $jf"
   else
@@ -168,15 +168,15 @@ fi
 echo "[6/6] 启动服务..."
 
 # 先停掉旧进程（如果有）
-if pgrep -f "copaw app" > /dev/null 2>&1; then
-  echo "  停止已有 CoPaw 进程..."
-  kill $(pgrep -f "copaw app") 2>/dev/null || true
+if pgrep -f "qwenpaw app" > /dev/null 2>&1; then
+  echo "  停止已有 QwenPaw 进程..."
+  kill $(pgrep -f "qwenpaw app") 2>/dev/null || true
   sleep 2
 fi
 
-nohup copaw app --host 0.0.0.0 --port 8088 > "$COPAW_DIR/copaw.log" 2>&1 &
-COPAW_PID=$!
-echo "  CoPaw 已启动 (PID: $COPAW_PID)"
+nohup qwenpaw app --host 0.0.0.0 --port 8088 > "$QWENPAW_DIR/qwenpaw.log" 2>&1 &
+QWENPAW_PID=$!
+echo "  QwenPaw 已启动 (PID: $QWENPAW_PID)"
 echo "  等待服务就绪..."
 sleep 5
 
@@ -184,7 +184,7 @@ sleep 5
 if curl -s -o /dev/null -w "%{http_code}" "http://localhost:8088/" 2>/dev/null | grep -q "200\|404"; then
   echo "  服务已就绪"
 else
-  echo "  警告: 服务可能未就绪，请查看日志: tail -f $COPAW_DIR/copaw.log"
+  echo "  警告: 服务可能未就绪，请查看日志: tail -f $QWENPAW_DIR/qwenpaw.log"
 fi
 
 echo ""
@@ -193,10 +193,10 @@ echo " 部署完成!"
 echo "=============================="
 echo ""
 echo "服务地址:  http://localhost:8088/"
-echo "日志文件:  $COPAW_DIR/copaw.log"
-echo "停止服务:  kill $COPAW_PID"
+echo "日志文件:  $QWENPAW_DIR/qwenpaw.log"
+echo "停止服务:  kill $QWENPAW_PID"
 echo ""
 echo "在钉钉中搜索你的机器人名称即可开始对话。"
 echo ""
 echo "如需查看钉钉频道状态:"
-echo "  copaw channels list"
+echo "  qwenpaw channels list"

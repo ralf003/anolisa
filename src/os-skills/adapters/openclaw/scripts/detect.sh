@@ -20,9 +20,9 @@ OPENCLAW_SKILLS_DIR="${OPENCLAW_SKILLS_DIR:-${OPENCLAW_STATE_DIR%/}/skills}"
 export PATH="$HOME/.local/bin:${OPENCLAW_STATE_DIR%/}/bin:/usr/local/bin:$PATH"
 
 OS_SKILLS=(
-    copaw-usage
+    qwenpaw-usage
     install-claude-code
-    install-copaw
+    install-qwenpaw
     install-hermes
     install-openclaw
     setup-mcp

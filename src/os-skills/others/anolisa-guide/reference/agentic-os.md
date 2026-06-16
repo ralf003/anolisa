@@ -25,7 +25,7 @@ ANOLISA适用范围说明：
         
     -   支持实例内存建议>=2GB
         
--   适用于各种 Agent 场景工作负载，包括 OpenClaw、CoPaw、Claude Code 等主流 Agent 框架
+-   适用于各种 Agent 场景工作负载，包括 OpenClaw、QwenPaw、Claude Code 等主流 Agent 框架
     
 
 ## 费用

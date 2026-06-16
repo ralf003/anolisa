@@ -1,12 +1,12 @@
 ---
-name: copaw-usage
-description: "CoPaw 命令行使用技巧：涵盖心跳（Heartbeat）配置、定时任务管理、Docker 打包部署、工作区导出迁移等操作。当用户要求添加心跳任务、配置定时自检、打包 CoPaw 实例、部署到其他服务器、生成 Dockerfile 或 docker-compose 文件时使用本 skill。"
+name: qwenpaw-usage
+description: "QwenPaw 命令行使用技巧：涵盖心跳（Heartbeat）配置、定时任务管理、Docker 打包部署、工作区导出迁移等操作。当用户要求添加心跳任务、配置定时自检、打包 QwenPaw 实例、部署到其他服务器、生成 Dockerfile 或 docker-compose 文件时使用本 skill。"
 version: 1.0.0
-tags: ["copaw"]
+tags: ["qwenpaw"]
 ---
-# CoPaw 命令行使用技巧
+# QwenPaw 命令行使用技巧
 
-本 Skill 覆盖两类高频场景：**心跳（Heartbeat）任务配置** 和 **打包部署 CoPaw 实例到其他服务器**。
+本 Skill 覆盖两类高频场景：**心跳（Heartbeat）任务配置** 和 **打包部署 QwenPaw 实例到其他服务器**。
 
 ---
 
@@ -14,16 +14,16 @@ tags: ["copaw"]
 
 ### 什么是心跳
 
-心跳是 CoPaw 的定时自检机制：按固定间隔读取 `HEARTBEAT.md` 的内容作为用户消息发给 CoPaw，CoPaw 执行后可选择将回复投递到上次对话的频道。适合做「定期自检、每日摘要、定时提醒」。
+心跳是 QwenPaw 的定时自检机制：按固定间隔读取 `HEARTBEAT.md` 的内容作为用户消息发给 QwenPaw，QwenPaw 执行后可选择将回复投递到上次对话的频道。适合做「定期自检、每日摘要、定时提醒」。
 
 ### 操作步骤
 
 **1. 编写 HEARTBEAT.md**
 
-文件位于工作目录下，默认路径：`~/.copaw/HEARTBEAT.md`。
-可通过环境变量 `COPAW_HEARTBEAT_FILE` 更改文件名。
+文件位于工作目录下，默认路径：`~/.qwenpaw/HEARTBEAT.md`。
+可通过环境变量 `QWENPAW_HEARTBEAT_FILE` 更改文件名。
 
-直接用文本编辑器或 `cat` / `echo` 写入即可，内容是每次心跳要问 CoPaw 的问题：
+直接用文本编辑器或 `cat` / `echo` 写入即可，内容是每次心跳要问 QwenPaw 的问题：
 
 ```markdown
 # Heartbeat checklist
@@ -40,8 +40,8 @@ tags: ["copaw"]
 
 心跳参数有两层配置：
 
-- **全局默认**：`~/.copaw/config.json` → `agents.defaults.heartbeat`（对所有智能体生效）
-- **智能体独立**：`~/.copaw/workspaces/{agent_id}/agent.json` → `heartbeat`（覆盖全局默认）
+- **全局默认**：`~/.qwenpaw/config.json` → `agents.defaults.heartbeat`（对所有智能体生效）
+- **智能体独立**：`~/.qwenpaw/workspaces/{agent_id}/agent.json` → `heartbeat`（覆盖全局默认）
 
 可用字段：
 
@@ -81,7 +81,7 @@ tags: ["copaw"]
 保存文件后，若服务正在运行会自动加载新配置。也可通过以下命令手动重载：
 
 ```bash
-copaw daemon reload-config
+qwenpaw daemon reload-config
 ```
 
 > 注意：频道和 MCP 配置的变更需要在对话中执行 `/daemon restart` 或重启进程后才能生效。
@@ -95,7 +95,7 @@ copaw daemon reload-config
 | 投递 | 仅 `main`（不发）或 `last`（上次频道） | 每个任务独立指定频道和用户   |
 | 适用 | 固定的一套自检/摘要                        | 多条不同时间、不同内容的任务 |
 
-> 如果用户需要的是「每天 9 点发早安到钉钉」「每 2 小时检查待办发到飞书」这类多条独立任务，应引导使用 `copaw cron create`（参见下方定时任务部分），而非心跳。
+> 如果用户需要的是「每天 9 点发早安到钉钉」「每 2 小时检查待办发到飞书」这类多条独立任务，应引导使用 `qwenpaw cron create`（参见下方定时任务部分），而非心跳。
 
 ### 完整操作示例
 
@@ -105,7 +105,7 @@ copaw daemon reload-config
 
 ```bash
 # 1. 写入心跳内容
-cat > ~/.copaw/HEARTBEAT.md << 'EOF'
+cat > ~/.qwenpaw/HEARTBEAT.md << 'EOF'
 # 心跳任务
 
 - 检查收件箱是否有新邮件
@@ -122,18 +122,18 @@ EOF
 # }
 
 # 3. 重载配置
-copaw daemon reload-config
+qwenpaw daemon reload-config
 ```
 
 ---
 
 ## 补充：定时任务（Cron）快速参考
 
-当用户需要多条定时任务时，使用 `copaw cron` 命令（需服务运行中）：
+当用户需要多条定时任务时，使用 `qwenpaw cron` 命令（需服务运行中）：
 
 ```bash
-# 创建 agent 类型任务（向 CoPaw 提问并发结果到频道）
-copaw cron create \
+# 创建 agent 类型任务（向 QwenPaw 提问并发结果到频道）
+qwenpaw cron create \
   --type agent \
   --name "检查邮件" \
   --cron "0 */1 * * *" \
@@ -143,7 +143,7 @@ copaw cron create \
   --text "检查收件箱有没有新邮件，如果有列出来"
 
 # 创建 text 类型任务（定时发固定文案）
-copaw cron create \
+qwenpaw cron create \
   --type text \
   --name "每日早安" \
   --cron "0 9 * * *" \
@@ -153,16 +153,16 @@ copaw cron create \
   --text "早上好！新的一天开始了！"
 
 # 常用管理命令
-copaw cron list                  # 列出所有任务
-copaw cron get <job_id>          # 查看任务配置
-copaw cron state <job_id>        # 查看运行状态
-copaw cron pause <job_id>        # 暂停任务
-copaw cron resume <job_id>       # 恢复任务
-copaw cron run <job_id>          # 立刻执行一次
-copaw cron delete <job_id>       # 删除任务
+qwenpaw cron list                  # 列出所有任务
+qwenpaw cron get <job_id>          # 查看任务配置
+qwenpaw cron state <job_id>        # 查看运行状态
+qwenpaw cron pause <job_id>        # 暂停任务
+qwenpaw cron resume <job_id>       # 恢复任务
+qwenpaw cron run <job_id>          # 立刻执行一次
+qwenpaw cron delete <job_id>       # 删除任务
 
 # 从 JSON 文件创建（复杂配置）
-copaw cron create -f job_spec.json
+qwenpaw cron create -f job_spec.json
 ```
 
 可选参数：`--timezone`（默认用户时区）、`--enabled/--no-enabled`、`--mode`（`stream`/`final`）、`--base-url`、`--agent-id`。
@@ -179,7 +179,7 @@ Cron 表达式速查（五段式：分 时 日 月 周）：
 
 ---
 
-## 场景二：打包 CoPaw 实例部署到其他服务器
+## 场景二：打包 QwenPaw 实例部署到其他服务器
 
 ### 方案概览
 
@@ -201,8 +201,8 @@ Cron 表达式速查（五段式：分 时 日 月 周）：
 
 ```bash
 # 打包工作目录（包含配置、对话、记忆、技能等）
-cd ~/.copaw
-tar czf copaw-workspace.tar.gz \
+cd ~/.qwenpaw
+tar czf qwenpaw-workspace.tar.gz \
   config.json \
   workspaces/
 ```
@@ -213,21 +213,21 @@ tar czf copaw-workspace.tar.gz \
 version: '3.8'
 
 volumes:
-  copaw-data:
-    name: copaw-data
-  copaw-secrets:
-    name: copaw-secrets
+  qwenpaw-data:
+    name: qwenpaw-data
+  qwenpaw-secrets:
+    name: qwenpaw-secrets
 
 services:
-  copaw:
-    image: agentscope/copaw:latest
-    container_name: copaw
+  qwenpaw:
+    image: agentscope/qwenpaw:latest
+    container_name: qwenpaw
     restart: always
     ports:
       - "127.0.0.1:8088:8088"
     volumes:
-      - copaw-data:/app/working
-      - copaw-secrets:/app/working.secret
+      - qwenpaw-data:/app/working
+      - qwenpaw-secrets:/app/working.secret
     environment:
       # 按需传入 API Key
       - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY}
@@ -238,7 +238,7 @@ services:
     #   - "host.docker.internal:host-gateway"
 ```
 
-> 国内用户可替换为 ACR 镜像：`agentscope-registry.ap-southeast-1.cr.aliyuncs.com/agentscope/copaw:latest`
+> 国内用户可替换为 ACR 镜像：`agentscope-registry.ap-southeast-1.cr.aliyuncs.com/agentscope/qwenpaw:latest`
 
 **步骤 3：恢复工作区**
 
@@ -247,10 +247,10 @@ services:
 docker compose up -d
 
 # 找到数据卷挂载点
-MOUNT_PATH=$(docker volume inspect copaw-data --format '{{ .Mountpoint }}')
+MOUNT_PATH=$(docker volume inspect qwenpaw-data --format '{{ .Mountpoint }}')
 
 # 将备份解压到数据卷
-sudo tar xzf copaw-workspace.tar.gz -C "$MOUNT_PATH"
+sudo tar xzf qwenpaw-workspace.tar.gz -C "$MOUNT_PATH"
 
 # 重启使配置生效
 docker compose restart
@@ -291,7 +291,7 @@ docker compose up -d
 
 ```dockerfile
 # 基于官方镜像
-FROM agentscope/copaw:latest
+FROM agentscope/qwenpaw:latest
 
 # 预装额外 Python 包
 RUN pip install --no-cache-dir some-package another-package
@@ -303,32 +303,32 @@ COPY my_skills/ /app/working/customized_skills/
 # COPY config.json /app/working/config.json
 
 # 如需更改默认端口
-# ENV COPAW_PORT=3000
+# ENV QWENPAW_PORT=3000
 # EXPOSE 3000
 ```
 
 构建并运行：
 
 ```bash
-docker build -t my-copaw .
+docker build -t my-qwenpaw .
 docker run -d \
-  --name copaw \
+  --name qwenpaw \
   --restart always \
   -p 127.0.0.1:8088:8088 \
-  -v copaw-data:/app/working \
-  -v copaw-secrets:/app/working.secret \
+  -v qwenpaw-data:/app/working \
+  -v qwenpaw-secrets:/app/working.secret \
   -e DASHSCOPE_API_KEY="your-key" \
-  my-copaw
+  my-qwenpaw
 ```
 
 ### Docker 部署关键参数
 
 | 环境变量                   | 默认值                                          | 说明               |
 | -------------------------- | ----------------------------------------------- | ------------------ |
-| `COPAW_WORKING_DIR`      | `/app/working`                                | 工作目录（容器内） |
-| `COPAW_SECRET_DIR`       | `/app/working.secret`                         | 敏感数据目录       |
-| `COPAW_PORT`             | `8088`                                        | 服务端口           |
-| `COPAW_ENABLED_CHANNELS` | `discord,telegram,dingtalk,feishu,qq,console` | 启用的频道         |
+| `QWENPAW_WORKING_DIR`      | `/app/working`                                | 工作目录（容器内） |
+| `QWENPAW_SECRET_DIR`       | `/app/working.secret`                         | 敏感数据目录       |
+| `QWENPAW_PORT`             | `8088`                                        | 服务端口           |
+| `QWENPAW_ENABLED_CHANNELS` | `discord,telegram,dingtalk,feishu,qq,console` | 启用的频道         |
 
 ### Docker 中连接本机模型服务
 
@@ -338,7 +338,7 @@ docker run -d \
 docker run ... \
   --add-host=host.docker.internal:host-gateway \
   -e OLLAMA_BASE_URL=http://host.docker.internal:11434 \
-  agentscope/copaw:latest
+  agentscope/qwenpaw:latest
 ```
 
 ---
@@ -346,6 +346,6 @@ docker run ... \
 ## 使用建议
 
 - 用户描述模糊时，先询问确认：是要心跳（单一自检循环）还是定时任务（多条独立任务）？是要迁移现有实例还是全新部署？
-- 涉及 API Key 等敏感信息时，引导用户使用环境变量或 `copaw env set` 命令，不要在配置文件中明文写入。
+- 涉及 API Key 等敏感信息时，引导用户使用环境变量或 `qwenpaw env set` 命令，不要在配置文件中明文写入。
 - 多智能体场景下，几乎所有命令支持 `--agent-id` 参数，默认为 `default`。
-- 配置修改后可用 `copaw daemon reload-config` 热加载，无需重启服务。
+- 配置修改后可用 `qwenpaw daemon reload-config` 热加载，无需重启服务。

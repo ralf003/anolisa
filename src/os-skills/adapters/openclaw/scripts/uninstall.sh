@@ -14,9 +14,9 @@ OPENCLAW_STATE_DIR="${OPENCLAW_STATE_DIR%/}"
 OPENCLAW_SKILLS_DIR="${OPENCLAW_SKILLS_DIR:-${OPENCLAW_STATE_DIR%/}/skills}"
 DRY_RUN="${ANOLISA_DRY_RUN:-0}"
 OS_SKILLS=(
-    copaw-usage
+    qwenpaw-usage
     install-claude-code
-    install-copaw
+    install-qwenpaw
     install-hermes
     install-openclaw
     setup-mcp

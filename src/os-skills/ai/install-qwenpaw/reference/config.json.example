@@ -12,7 +12,7 @@
       "require_mention": false,
       "db_path": "~/Library/Messages/chat.db",
       "poll_sec": 1.0,
-      "media_dir": "~/.copaw/media",
+      "media_dir": "~/.qwenpaw/media",
       "max_decoded_size": 10485760
     },
     "discord": {
@@ -41,7 +41,7 @@
       "require_mention": false,
       "client_id": "{DINGTALK_CLIENT_ID}",
       "client_secret": "{DINGTALK_CLIENT_SECRET}",
-      "media_dir": "~/.copaw/media"
+      "media_dir": "~/.qwenpaw/media"
     },
     "feishu": {
       "enabled": false,
@@ -57,7 +57,7 @@
       "app_secret": "",
       "encrypt_key": "",
       "verification_token": "",
-      "media_dir": "~/.copaw/media"
+      "media_dir": "~/.qwenpaw/media"
     },
     "qq": {
       "enabled": false,
@@ -100,7 +100,7 @@
       "require_mention": false,
       "url": "",
       "bot_token": "",
-      "media_dir": "~/.copaw/media/mattermost",
+      "media_dir": "~/.qwenpaw/media/mattermost",
       "show_typing": null,
       "thread_follow_without_mention": false
     },
@@ -171,7 +171,7 @@
       "tts_voice": "en-US-Journey-D",
       "stt_provider": "deepgram",
       "language": "en-US",
-      "welcome_greeting": "Hi! This is CoPaw. How can I help you?"
+      "welcome_greeting": "Hi! This is QwenPaw. How can I help you?"
     }
   },
   "mcp": {

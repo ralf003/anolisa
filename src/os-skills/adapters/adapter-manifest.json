@@ -9,9 +9,9 @@
       "capabilities": {
         "plugins": [],
         "skills": [
-          "copaw-usage",
+          "qwenpaw-usage",
           "install-claude-code",
-          "install-copaw",
+          "install-qwenpaw",
           "install-hermes",
           "install-openclaw",
           "setup-mcp",
@@ -48,9 +48,9 @@
       "capabilities": {
         "plugins": [],
         "skills": [
-          "copaw-usage",
+          "qwenpaw-usage",
           "install-claude-code",
-          "install-copaw",
+          "install-qwenpaw",
           "install-hermes",
           "install-openclaw",
           "setup-mcp",

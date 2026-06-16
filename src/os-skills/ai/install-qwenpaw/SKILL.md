@@ -1,12 +1,12 @@
 ---
-name: install-copaw
+name: install-qwenpaw
 version: 1.0.0
-description: 在 Alibaba Cloud Linux 4 (Alinux 4) 服务器上完成 CoPaw AI 助理的安装部署，包括脚本安装、直接写入配置文件、百炼模型 API Key 配置、钉钉频道接入。当用户需要安装 CoPaw、部署 AI 助理、配置钉钉机器人或百炼模型时使用此技能。
+description: 在 Alibaba Cloud Linux 4 (Alinux 4) 服务器上完成 QwenPaw AI 助理的安装部署，包括脚本安装、直接写入配置文件、百炼模型 API Key 配置、钉钉频道接入。当用户需要安装 QwenPaw、部署 AI 助理、配置钉钉机器人或百炼模型时使用此技能。
 layer: application
 lifecycle: usage
 ---
 
-# CoPaw Linux 服务器安装部署
+# QwenPaw Linux 服务器安装部署
 
 ## 前置信息收集
 
@@ -34,7 +34,7 @@ bash scripts/setup.sh sk-76f003xxx dingxxxxx your_secret
 bash scripts/setup.sh sk-76f003xxx dingxxxxx your_secret qwen3-235b-a22b-thinking-2507
 ```
 
-脚本会自动完成：检查 uv → 安装 CoPaw → 创建目录 → 写入配置（替换占位符）→ 验证文件 → 后台启动服务。
+脚本会自动完成：检查 uv → 安装 QwenPaw → 创建目录 → 写入配置（替换占位符）→ 验证文件 → 后台启动服务。
 
 执行前需要先将本 skill 目录上传到服务器，或通过工具将 `scripts/setup.sh` 和 `reference/` 目录写入服务器。
 
@@ -46,7 +46,7 @@ bash scripts/setup.sh sk-76f003xxx dingxxxxx your_secret qwen3-235b-a22b-thinkin
 
 ### 步骤 1: 检查并安装 uv
 
-CoPaw 依赖 `uv` 作为 Python 包管理器。在 Alibaba Cloud Linux (alinux4) 上通过 pip 安装：
+QwenPaw 依赖 `uv` 作为 Python 包管理器。在 Alibaba Cloud Linux (alinux4) 上通过 pip 安装：
 
 ```bash
 if command -v uv &>/dev/null; then
@@ -56,36 +56,36 @@ else
 fi
 ```
 
-### 步骤 2: 安装 CoPaw
+### 步骤 2: 安装 QwenPaw
 
 ```bash
-curl -fsSL https://copaw.agentscope.io/install.sh | bash
+curl -fsSL https://qwenpaw.agentscope.io/install.sh | bash
 source ~/.bashrc
 ```
 
 验证：
 
 ```bash
-copaw --version
+qwenpaw --version
 ```
 
 找不到命令时手动加 PATH：
 
 ```bash
-export PATH="$HOME/.copaw/bin:$PATH"
-echo 'export PATH="$HOME/.copaw/bin:$PATH"' >> ~/.bashrc
+export PATH="$HOME/.qwenpaw/bin:$PATH"
+echo 'export PATH="$HOME/.qwenpaw/bin:$PATH"' >> ~/.bashrc
 source ~/.bashrc
 ```
 
 ### 步骤 3: 创建目录结构
 
 ```bash
-mkdir -p ~/.copaw/media
-mkdir -p ~/.copaw/active_skills
-mkdir -p ~/.copaw/customized_skills
-mkdir -p ~/.copaw.secret/providers/builtin
-mkdir -p ~/.copaw.secret/providers/custom
-chmod 700 ~/.copaw.secret ~/.copaw.secret/providers ~/.copaw.secret/providers/builtin ~/.copaw.secret/providers/custom
+mkdir -p ~/.qwenpaw/media
+mkdir -p ~/.qwenpaw/active_skills
+mkdir -p ~/.qwenpaw/customized_skills
+mkdir -p ~/.qwenpaw.secret/providers/builtin
+mkdir -p ~/.qwenpaw.secret/providers/custom
+chmod 700 ~/.qwenpaw.secret ~/.qwenpaw.secret/providers ~/.qwenpaw.secret/providers/builtin ~/.qwenpaw.secret/providers/custom
 ```
 
 ### 步骤 4: 写入配置文件
@@ -94,7 +94,7 @@ chmod 700 ~/.copaw.secret ~/.copaw.secret/providers ~/.copaw.secret/providers/bu
 
 #### 3a: config.json（含钉钉频道配置）
 
-读取 `reference/config.json.example`，替换后写入 `~/.copaw/config.json`：
+读取 `reference/config.json.example`，替换后写入 `~/.qwenpaw/config.json`：
 
 ```
 替换:
@@ -102,58 +102,58 @@ chmod 700 ~/.copaw.secret ~/.copaw.secret/providers ~/.copaw.secret/providers/bu
   {DINGTALK_CLIENT_SECRET} → 用户的钉钉 Client Secret
 ```
 
-钉钉已预设 `"enabled": true`。`copaw app` 启动时会自动迁移生成 `agent.json` 等文件。
+钉钉已预设 `"enabled": true`。`qwenpaw app` 启动时会自动迁移生成 `agent.json` 等文件。
 
 #### 3b: dashscope.json
 
-读取 `reference/dashscope.json`，替换后写入 `~/.copaw.secret/providers/builtin/dashscope.json`：
+读取 `reference/dashscope.json`，替换后写入 `~/.qwenpaw.secret/providers/builtin/dashscope.json`：
 
 ```
 替换: {DASHSCOPE_API_KEY} → 用户的百炼 API Key
 ```
 
 ```bash
-chmod 600 ~/.copaw.secret/providers/builtin/dashscope.json
+chmod 600 ~/.qwenpaw.secret/providers/builtin/dashscope.json
 ```
 
 #### 3c: active_model.json
 
-读取 `reference/active_model.json`，替换后写入 `~/.copaw.secret/providers/active_model.json`：
+读取 `reference/active_model.json`，替换后写入 `~/.qwenpaw.secret/providers/active_model.json`：
 
 ```
 替换: {MODEL_NAME} → 用户指定的模型（默认 qwen3-max）
 ```
 
 ```bash
-chmod 600 ~/.copaw.secret/providers/active_model.json
+chmod 600 ~/.qwenpaw.secret/providers/active_model.json
 ```
 
 #### 3d: Markdown 文件
 
-原样复制到 `~/.copaw/`（无占位符）：
+原样复制到 `~/.qwenpaw/`（无占位符）：
 
 ```
-reference/AGENTS.md    → ~/.copaw/AGENTS.md
-reference/SOUL.md      → ~/.copaw/SOUL.md
-reference/PROFILE.md   → ~/.copaw/PROFILE.md
-reference/MEMORY.md    → ~/.copaw/MEMORY.md
-reference/BOOTSTRAP.md → ~/.copaw/BOOTSTRAP.md
-reference/HEARTBEAT.md → ~/.copaw/HEARTBEAT.md
+reference/AGENTS.md    → ~/.qwenpaw/AGENTS.md
+reference/SOUL.md      → ~/.qwenpaw/SOUL.md
+reference/PROFILE.md   → ~/.qwenpaw/PROFILE.md
+reference/MEMORY.md    → ~/.qwenpaw/MEMORY.md
+reference/BOOTSTRAP.md → ~/.qwenpaw/BOOTSTRAP.md
+reference/HEARTBEAT.md → ~/.qwenpaw/HEARTBEAT.md
 ```
 
 #### 3e: 验证文件完整性
 
 ```bash
 for f in \
-  ~/.copaw/config.json \
-  ~/.copaw.secret/providers/builtin/dashscope.json \
-  ~/.copaw.secret/providers/active_model.json \
-  ~/.copaw/AGENTS.md \
-  ~/.copaw/SOUL.md \
-  ~/.copaw/PROFILE.md \
-  ~/.copaw/MEMORY.md \
-  ~/.copaw/BOOTSTRAP.md \
-  ~/.copaw/HEARTBEAT.md; do
+  ~/.qwenpaw/config.json \
+  ~/.qwenpaw.secret/providers/builtin/dashscope.json \
+  ~/.qwenpaw.secret/providers/active_model.json \
+  ~/.qwenpaw/AGENTS.md \
+  ~/.qwenpaw/SOUL.md \
+  ~/.qwenpaw/PROFILE.md \
+  ~/.qwenpaw/MEMORY.md \
+  ~/.qwenpaw/BOOTSTRAP.md \
+  ~/.qwenpaw/HEARTBEAT.md; do
   [ -f "$f" ] && echo "OK: $f" || echo "MISSING: $f"
 done
 ```
@@ -161,8 +161,8 @@ done
 ### 步骤 5: 启动服务
 
 ```bash
-nohup copaw app --host 0.0.0.0 --port 8088 > ~/.copaw/copaw.log 2>&1 &
-echo "CoPaw PID: $!"
+nohup qwenpaw app --host 0.0.0.0 --port 8088 > ~/.qwenpaw/qwenpaw.log 2>&1 &
+echo "QwenPaw PID: $!"
 sleep 5
 ```
 
@@ -180,7 +180,7 @@ curl -s -N -X POST "http://localhost:8088/api/agent/process" \
 返回 SSE 流式数据（`data:` 开头）表示服务正常。
 
 ```bash
-copaw channels list
+qwenpaw channels list
 ```
 
 确认 dingtalk 显示 `enabled: True`。
@@ -189,18 +189,18 @@ copaw channels list
 
 ## 故障排查
 
-### copaw 命令找不到
+### qwenpaw 命令找不到
 
 ```bash
-export PATH="$HOME/.copaw/bin:$PATH"
+export PATH="$HOME/.qwenpaw/bin:$PATH"
 source ~/.bashrc
 ```
 
 ### 模型返回错误
 
 ```bash
-cat ~/.copaw.secret/providers/builtin/dashscope.json | python3 -m json.tool
-cat ~/.copaw.secret/providers/active_model.json | python3 -m json.tool
+cat ~/.qwenpaw.secret/providers/builtin/dashscope.json | python3 -m json.tool
+cat ~/.qwenpaw.secret/providers/active_model.json | python3 -m json.tool
 ```
 
 确认 `api_key` 以 `sk-` 开头，`model` 字段有值。
@@ -210,11 +210,11 @@ cat ~/.copaw.secret/providers/active_model.json | python3 -m json.tool
 ```bash
 python3 -c "
 import json
-with open('$HOME/.copaw/config.json') as f:
+with open('$HOME/.qwenpaw/config.json') as f:
     c = json.load(f)
 print(json.dumps(c.get('channels',{}).get('dingtalk',{}), indent=2, ensure_ascii=False))
 "
-tail -100 ~/.copaw/copaw.log | grep -i dingtalk
+tail -100 ~/.qwenpaw/qwenpaw.log | grep -i dingtalk
 ```
 
 钉钉侧检查：应用已发布、Stream 模式已启用、Client ID/Secret 正确。
@@ -223,13 +223,13 @@ tail -100 ~/.copaw/copaw.log | grep -i dingtalk
 
 ```bash
 lsof -i :8088
-nohup copaw app --host 0.0.0.0 --port 9090 > ~/.copaw/copaw.log 2>&1 &
+nohup qwenpaw app --host 0.0.0.0 --port 9090 > ~/.qwenpaw/qwenpaw.log 2>&1 &
 ```
 
 ### 停止服务
 
 ```bash
-kill $(pgrep -f "copaw app")
+kill $(pgrep -f "qwenpaw app")
 ```
 
 ---
@@ -249,18 +249,18 @@ kill $(pgrep -f "copaw app")
 ## 文件清单
 
 ```
-install-copaw/
+install-qwenpaw/
 ├── SKILL.md
 ├── scripts/
 │   └── setup.sh                 # 一键部署脚本
 └── reference/
-    ├── config.json.example      → ~/.copaw/config.json
-    ├── dashscope.json           → ~/.copaw.secret/providers/builtin/dashscope.json
-    ├── active_model.json        → ~/.copaw.secret/providers/active_model.json
-    ├── AGENTS.md                → ~/.copaw/AGENTS.md
-    ├── SOUL.md                  → ~/.copaw/SOUL.md
-    ├── PROFILE.md               → ~/.copaw/PROFILE.md
-    ├── MEMORY.md                → ~/.copaw/MEMORY.md
-    ├── BOOTSTRAP.md             → ~/.copaw/BOOTSTRAP.md
-    └── HEARTBEAT.md             → ~/.copaw/HEARTBEAT.md
+    ├── config.json.example      → ~/.qwenpaw/config.json
+    ├── dashscope.json           → ~/.qwenpaw.secret/providers/builtin/dashscope.json
+    ├── active_model.json        → ~/.qwenpaw.secret/providers/active_model.json
+    ├── AGENTS.md                → ~/.qwenpaw/AGENTS.md
+    ├── SOUL.md                  → ~/.qwenpaw/SOUL.md
+    ├── PROFILE.md               → ~/.qwenpaw/PROFILE.md
+    ├── MEMORY.md                → ~/.qwenpaw/MEMORY.md
+    ├── BOOTSTRAP.md             → ~/.qwenpaw/BOOTSTRAP.md
+    └── HEARTBEAT.md             → ~/.qwenpaw/HEARTBEAT.md
 ```

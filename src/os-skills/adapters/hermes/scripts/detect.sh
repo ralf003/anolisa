@@ -16,9 +16,9 @@ HERMES_SKILLS_DIR="${HERMES_SKILLS_DIR:-${HERMES_HOME%/}/skills}"
 export PATH="$HOME/.local/bin:${HERMES_HOME%/}/bin:/usr/local/bin:$PATH"
 
 OS_SKILLS=(
-    copaw-usage
+    qwenpaw-usage
     install-claude-code
-    install-copaw
+    install-qwenpaw
     install-hermes
     install-openclaw
     setup-mcp
