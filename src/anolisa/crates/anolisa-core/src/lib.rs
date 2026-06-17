@@ -9,6 +9,7 @@ pub mod backup;
 pub mod catalog;
 pub mod central_log;
 pub mod component;
+pub mod daemon_server;
 pub mod dependency;
 pub mod distribution;
 pub mod download;
@@ -30,6 +31,7 @@ pub mod self_update;
 pub mod service;
 pub mod state;
 pub mod support_matrix;
+pub mod system_helper;
 pub mod transaction;
 pub mod upload;
 
