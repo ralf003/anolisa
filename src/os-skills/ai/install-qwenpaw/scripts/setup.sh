@@ -50,9 +50,15 @@ echo "[1/6] 检查 uv..."
 if command -v uv &>/dev/null; then
   echo "  uv 已安装: $(uv --version 2>/dev/null)"
 else
-  echo "  uv 未安装，正在通过 pip 安装..."
-  pip install uv -q
-  echo "  uv 安装完成: $(uv --version 2>/dev/null)"
+  echo "  uv 未安装，正在安装..."
+  if pip install uv -i https://mirrors.aliyun.com/pypi/simple/ -q 2>/dev/null; then
+    echo "  uv 安装完成 (pip): $(uv --version 2>/dev/null)"
+  else
+    echo "  pip 安装失败，尝试官方脚本..."
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    export PATH="$HOME/.local/bin:$PATH"
+    echo "  uv 安装完成 (script): $(uv --version 2>/dev/null)"
+  fi
 fi
 
 # ── 步骤 2: 安装 QwenPaw ──────────────────────────────────
@@ -60,7 +66,12 @@ echo "[2/6] 安装 QwenPaw..."
 if command -v qwenpaw &>/dev/null; then
   echo "  qwenpaw 已安装: $(qwenpaw --version 2>/dev/null || echo '未知版本')"
 else
-  curl -fsSL https://qwenpaw.agentscope.io/install.sh | bash
+  if uv pip install qwenpaw --index-url https://mirrors.aliyun.com/pypi/simple/ 2>/dev/null; then
+    echo "  安装完成 (阿里云镜像)"
+  else
+    echo "  阿里云镜像安装失败，尝试官方脚本..."
+    curl -fsSL https://qwenpaw.agentscope.io/install.sh | bash
+  fi
   export PATH="$HOME/.qwenpaw/bin:$PATH"
   # 写入 bashrc（如果还没有的话）
   if ! grep -q '.qwenpaw/bin' "$HOME/.bashrc" 2>/dev/null; then

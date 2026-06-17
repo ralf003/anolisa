@@ -46,21 +46,28 @@ bash scripts/setup.sh sk-76f003xxx dingxxxxx your_secret qwen3-235b-a22b-thinkin
 
 ### 步骤 1: 检查并安装 uv
 
-QwenPaw 依赖 `uv` 作为 Python 包管理器。在 Alibaba Cloud Linux (alinux4) 上通过 pip 安装：
+QwenPaw 依赖 `uv` 作为 Python 包管理器。优先通过阿里云镜像安装，失败时用官方脚本兜底：
 
 ```bash
 if command -v uv &>/dev/null; then
   echo "uv 已安装: $(uv --version)"
 else
-  pip install uv
+  # 方式 1: pip + 阿里云镜像（推荐）
+  pip install uv -i https://mirrors.aliyun.com/pypi/simple/
+  # 方式 2: 官方安装脚本（pip 不可用时）
+  # curl -LsSf https://astral.sh/uv/install.sh | sh
 fi
 ```
 
 ### 步骤 2: 安装 QwenPaw
 
 ```bash
-curl -fsSL https://qwenpaw.agentscope.io/install.sh | bash
-source ~/.bashrc
+# 方式 1: 阿里云镜像（推荐）
+uv pip install qwenpaw --index-url https://mirrors.aliyun.com/pypi/simple/
+
+# 方式 2: 官方安装脚本（镜像不可用时）
+# curl -fsSL https://qwenpaw.agentscope.io/install.sh | bash
+# source ~/.bashrc
 ```
 
 验证：
