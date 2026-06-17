@@ -216,24 +216,26 @@ export class BtrfsManager {
   }
 
   /**
-   * Roll back the workspace to a specified checkpoint.
+   * Roll back the workspace to a specified checkpoint or N ancestors back.
    *
-   * @param target - Snapshot identifier (e.g. "msg1-step2") or name.
+   * @param target       - Snapshot identifier (mutually exclusive with numAncestors).
+   * @param numAncestors - Number of ancestors to traverse (mutually exclusive with target).
    * @returns A {@link RollbackResult} describing the outcome.
    */
-  public async rollback(target: string): Promise<RollbackResult> {
+  public async rollback(target?: string, numAncestors?: number): Promise<RollbackResult> {
     if (!this.workspacePath) {
       return { success: false, message: "Workspace not initialized" };
     }
 
+    const label = target || `ancestors=${numAncestors}`;
     try {
-      const output = await this.executor.rollback(this.workspacePath, target);
+      const output = await this.executor.rollback(this.workspacePath, target, numAncestors);
 
       if (output.exitCode !== 0) {
         return {
           success: false,
           target,
-          message: mapErrorToLLMMessage(output.stderr, { id: target }),
+          message: mapErrorToLLMMessage(output.stderr, { id: label }),
         };
       }
 
@@ -246,11 +248,8 @@ export class BtrfsManager {
         }
       } catch { /* ignore refresh errors */ }
 
-      return {
-        success: true,
-        target,
-        message: `Rolled back to ${target}`,
-      };
+      const desc = target ? `Rolled back to ${target}` : `Rolled back ${numAncestors} ancestor(s)`;
+      return { success: true, target, message: desc };
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       return { success: false, target, message: `Rollback error: ${msg}` };

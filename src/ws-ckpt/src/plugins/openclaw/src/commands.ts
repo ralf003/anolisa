@@ -90,15 +90,29 @@ export class CommandExecutor {
   }
 
   /**
-   * Roll back the workspace to a specific snapshot.
+   * Roll back the workspace to a specific snapshot or N ancestors back.
    *
-   * Equivalent to: `ws-ckpt rollback --workspace <ws> --snapshot <target>`
-   *
-   * @param workspace - Workspace directory path.
-   * @param target    - Snapshot identifier or name to roll back to.
+   * @param workspace     - Workspace directory path.
+   * @param target        - Snapshot identifier (mutually exclusive with numAncestors).
+   * @param numAncestors  - Number of ancestors to traverse (mutually exclusive with target).
    */
-  public async rollback(workspace: string, target: string): Promise<CommandOutput> {
-    return this.run(["rollback", "--workspace", workspace, "--snapshot", target]);
+  public async rollback(
+    workspace: string,
+    target?: string,
+    numAncestors?: number,
+  ): Promise<CommandOutput> {
+    if (!target && numAncestors === undefined) {
+      throw new Error("Either 'target' or 'numAncestors' is required");
+    }
+    const args = ["rollback", "--workspace", workspace];
+    if (numAncestors !== undefined) {
+      // Plugin snapshots after each response, so head == current state;
+      // +1 so user's "go back 1 step" skips the head snapshot.
+      args.push("--num-ancestors", String(numAncestors + 1));
+    } else if (target) {
+      args.push("--snapshot", target);
+    }
+    return this.run(args);
   }
 
   /**

@@ -476,7 +476,8 @@ pub async fn delete_snapshot(
             .await?;
     }
 
-    // 5. Remove from index + save
+    // 5. Unlink from DAG, then remove from index + save
+    ws.index.unlink_node(&resolved_id);
     ws.index.snapshots.remove(&resolved_id);
     let snap_dir = state.index_dir(&ws.ws_id);
     tokio::fs::create_dir_all(&snap_dir)

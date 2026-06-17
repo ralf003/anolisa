@@ -48,7 +48,7 @@ async fn mock_server_handle(mut stream: tokio::net::UnixStream) {
         },
         Request::Rollback { to, .. } => Response::RollbackOk {
             from: "ws-test".to_string(),
-            to,
+            to: to.unwrap_or_default(),
         },
         Request::Delete { snapshot, .. } => Response::DeleteOk { target: snapshot },
         Request::List { .. } => Response::ListOk {
@@ -61,6 +61,8 @@ async fn mock_server_handle(mut stream: tokio::net::UnixStream) {
                     pinned: false,
                     created_at: chrono::Utc::now(),
                     missing: false,
+                    parent_id: None,
+                    child_ids: vec![],
                 },
             }],
         },
@@ -315,7 +317,8 @@ async fn full_rollback_request_response_over_socket() {
 
     let request = Request::Rollback {
         workspace: "/ws".to_string(),
-        to: "msg1-step2".to_string(),
+        to: Some("msg1-step2".to_string()),
+        num_ancestors: None,
     };
     let frame = encode_frame(&request).unwrap();
     client.write_all(&frame).await.unwrap();

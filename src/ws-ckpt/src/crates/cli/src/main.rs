@@ -150,9 +150,13 @@ enum Commands {
         #[arg(long, short = 'w', value_parser = workspace_value_parser())]
         workspace: String,
 
-        /// Target snapshot (ID like msg1-step2, or name like before-refactor)
-        #[arg(long = "snapshot", short = 's', value_parser = snapshot_id_value_parser())]
-        to: String,
+        /// Target snapshot (ID or prefix) — mutually exclusive with -n
+        #[arg(long = "snapshot", short = 's', conflicts_with = "num_ancestors", value_parser = snapshot_id_value_parser())]
+        to: Option<String>,
+
+        /// Roll back N ancestors along parent chain — mutually exclusive with -s
+        #[arg(long = "num-ancestors", short = 'n', conflicts_with = "to", value_parser = clap::value_parser!(u32).range(1..))]
+        num_ancestors: Option<u32>,
     },
 
     /// Delete a specific snapshot
@@ -339,10 +343,18 @@ async fn run(cli: Cli) -> Result<()> {
             let response = send_request_to_daemon(&request).await?;
             handle_response(response, &request).await?;
         }
-        Commands::Rollback { workspace, to } => {
+        Commands::Rollback {
+            workspace,
+            to,
+            num_ancestors,
+        } => {
+            if to.is_none() && num_ancestors.is_none() {
+                anyhow::bail!("either --snapshot/-s or --num-ancestors/-n must be specified");
+            }
             let request = Request::Rollback {
                 workspace: resolve_workspace_arg(&workspace),
                 to,
+                num_ancestors,
             };
             let response = send_request_to_daemon(&request).await?;
             handle_response(response, &request).await?;
@@ -1990,9 +2002,39 @@ mod tests {
         ])
         .unwrap();
         match cli.command {
-            Commands::Rollback { workspace, to } => {
+            Commands::Rollback {
+                workspace,
+                to,
+                num_ancestors,
+            } => {
                 assert_eq!(workspace, "/tmp/test");
-                assert_eq!(to, "msg1-step1");
+                assert_eq!(to.as_deref(), Some("msg1-step1"));
+                assert_eq!(num_ancestors, None);
+            }
+            _ => panic!("expected Rollback"),
+        }
+    }
+
+    #[test]
+    fn parse_rollback_num_ancestors() {
+        let cli = Cli::try_parse_from([
+            "ws-ckpt",
+            "rollback",
+            "--workspace",
+            "/tmp/test",
+            "--num-ancestors",
+            "3",
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::Rollback {
+                workspace,
+                to,
+                num_ancestors,
+            } => {
+                assert_eq!(workspace, "/tmp/test");
+                assert_eq!(to, None);
+                assert_eq!(num_ancestors, Some(3));
             }
             _ => panic!("expected Rollback"),
         }
@@ -2109,9 +2151,17 @@ mod tests {
     }
 
     #[test]
-    fn rollback_missing_to_fails() {
-        let result = Cli::try_parse_from(["ws-ckpt", "rollback", "--workspace", "/ws"]);
-        assert!(result.is_err(), "rollback without --snapshot should fail");
+    fn rollback_missing_both_target_and_ancestors_parses_but_fields_none() {
+        let cli = Cli::try_parse_from(["ws-ckpt", "rollback", "--workspace", "/ws"]).unwrap();
+        match cli.command {
+            Commands::Rollback {
+                to, num_ancestors, ..
+            } => {
+                assert!(to.is_none());
+                assert!(num_ancestors.is_none());
+            }
+            _ => panic!("expected Rollback"),
+        }
     }
 
     // ── Metadata JSON validation ──

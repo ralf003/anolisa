@@ -914,6 +914,8 @@ mod tests {
                 pinned: false,
                 created_at: chrono::Utc::now(),
                 missing: false,
+                parent_id: None,
+                child_ids: vec![],
             },
         );
         state.register_workspace("ws-abc".to_string(), PathBuf::from("/home/user/ws"), index);
@@ -939,6 +941,8 @@ mod tests {
                 pinned: false,
                 created_at: chrono::Utc::now(),
                 missing: false,
+                parent_id: None,
+                child_ids: vec![],
             },
         );
         state.register_workspace("ws-1".to_string(), PathBuf::from("/ws1"), index);
@@ -970,6 +974,8 @@ mod tests {
             pinned: false,
             created_at: chrono::Utc::now(),
             missing: false,
+            parent_id: None,
+            child_ids: vec![],
         };
 
         let mut idx1 = SnapshotIndex::new(PathBuf::from("/ws1"));

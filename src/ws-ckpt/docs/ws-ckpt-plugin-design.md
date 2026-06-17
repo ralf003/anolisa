@@ -133,11 +133,15 @@ Plugin 把以下七个工具用 OpenAI Function Calling 格式注册到 runtime:
 |------|------|----------|----------|
 | `ws-ckpt-config` | 查看 / 更新 plugin 配置 | — | `action`, `key`, `value` |
 | `ws-ckpt-checkpoint` | 手动创建快照 | `id` | `message`, `workspace` |
-| `ws-ckpt-rollback` | 回滚到指定快照 | `target` | `workspace` |
+| `ws-ckpt-rollback` | 回滚到指定快照或沿 parent 链回退 | — | `target`, `num_ancestors`/`numAncestors`, `workspace` |
 | `ws-ckpt-list` | 列出工作区所有快照 | — | — |
 | `ws-ckpt-diff` | 对比两个快照 | `from`, `to` | — |
 | `ws-ckpt-delete` | 删除指定快照 | `snapshot` | `workspace` |
 | `ws-ckpt-status` | 查看 daemon + 工作区状态 | — | — |
+
+### ws-ckpt-rollback 的 DAG 祖先回退
+
+`target` 和 `num_ancestors`（hermes snake_case）/ `numAncestors`（openclaw camelCase）互斥，至少提供一个。`num_ancestors` 沿 `SnapshotIndex.head` 的 parent 链回退 N 步（`1` = head 本身），映射到 CLI `ws-ckpt rollback -w <ws> -n <N>`。两个 plugin 各自校验 `>= 1`，与 `ancestor()` 入口校验形成四层防御。
 
 ### Workspace 解析:显式参数绕过缓存
 

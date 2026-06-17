@@ -90,47 +90,62 @@ export async function handleCheckpoint(
 export async function handleRollback(
   target?: string,
   workspace?: string,
+  numAncestors?: number,
 ): Promise<{ text: string; isError: boolean }> {
   if (!pluginState.manager || !pluginState.environmentReady) {
     return { text: UNAVAILABLE_MSG, isError: true };
   }
   const trimmed = target?.trim();
-  if (!trimmed) {
+
+  if (trimmed && numAncestors !== undefined) {
+    return { text: "'target' and 'numAncestors' are mutually exclusive", isError: true };
+  }
+  if (!trimmed && numAncestors === undefined) {
     return {
-      text: "Usage: ws-ckpt-rollback <target>\n  target: snapshot hash id",
+      text: "Either 'target' or 'numAncestors' is required.\n  target: snapshot id\n  numAncestors: number of ancestors to traverse (>=1)",
       isError: true,
     };
   }
-
-  const explicitWs = workspace?.trim();
-  if (explicitWs) {
-    const cwdCheck = cwdInsideWorkspace(explicitWs);
-    if (cwdCheck.inside) {
-      return { text: cwdInsideWorkspaceReason(cwdCheck.cwd, explicitWs), isError: true };
-    }
-    try {
-      const executor = new CommandExecutor();
-      const output = await executor.rollback(explicitWs, trimmed);
-      if (output.exitCode !== 0) {
-        return { text: mapErrorToLLMMessage(output.stderr, { id: trimmed }), isError: true };
-      }
-      return { text: `Rolled back to ${trimmed}`, isError: false };
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : String(error);
-      return { text: `Rollback error: ${msg}`, isError: true };
-    }
+  if (numAncestors !== undefined && (!Number.isFinite(numAncestors) || numAncestors < 1)) {
+    return { text: "'numAncestors' must be >= 1", isError: true };
   }
 
-  const ws = pluginState.resolvedConfig?.workspace;
-  if (ws) {
-    const cwdCheck = cwdInsideWorkspace(ws);
-    if (cwdCheck.inside) {
-      return { text: cwdInsideWorkspaceReason(cwdCheck.cwd, ws), isError: true };
-    }
+  const resolvedWs = workspace?.trim() || pluginState.resolvedConfig?.workspace;
+  if (!resolvedWs) {
+    return { text: "No workspace configured", isError: true };
   }
 
-  const result = await pluginState.manager.rollback(trimmed);
+  const cwdCheck = cwdInsideWorkspace(resolvedWs);
+  if (cwdCheck.inside) {
+    return { text: cwdInsideWorkspaceReason(cwdCheck.cwd, resolvedWs), isError: true };
+  }
+
+  if (workspace?.trim()) {
+    return runRollbackViaExecutor(resolvedWs, trimmed || undefined, numAncestors);
+  }
+
+  const result = await pluginState.manager.rollback(trimmed || undefined, numAncestors);
   return { text: result.message, isError: !result.success };
+}
+
+async function runRollbackViaExecutor(
+  ws: string,
+  target?: string,
+  numAncestors?: number,
+): Promise<{ text: string; isError: boolean }> {
+  try {
+    const executor = new CommandExecutor();
+    const output = await executor.rollback(ws, target, numAncestors);
+    if (output.exitCode !== 0) {
+      const label = target || `ancestors=${numAncestors}`;
+      return { text: mapErrorToLLMMessage(output.stderr, { id: label }), isError: true };
+    }
+    const desc = target ? `Rolled back to ${target}` : `Rolled back ${numAncestors} ancestor(s)`;
+    return { text: desc, isError: false };
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    return { text: `Rollback error: ${msg}`, isError: true };
+  }
 }
 
 export async function handleListCheckpoints(): Promise<{

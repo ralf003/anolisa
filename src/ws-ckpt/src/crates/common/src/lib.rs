@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
@@ -33,6 +33,9 @@ pub const POLICY_FILE: &str = "policy.toml";
 /// Snapshot advisory threshold; strict-greater filter shared by daemon and CLI.
 pub const ADVISORY_SNAPSHOT_LIMIT: u32 = 1000;
 
+/// Sentinel in head snapshot's `child_ids` marking the writable subvolume.
+pub const LIVE_CHILD: &str = "__live__";
+
 // ── Error type ──
 
 #[derive(Error, Debug)]
@@ -65,7 +68,8 @@ pub enum Request {
     },
     Rollback {
         workspace: String,
-        to: String,
+        to: Option<String>,
+        num_ancestors: Option<u32>,
     },
     Delete {
         workspace: Option<String>,
@@ -276,6 +280,10 @@ pub struct SnapshotMeta {
     /// Is the subvolume missing in the filesystem (detected in reconcile)
     #[serde(default)]
     pub missing: bool,
+    #[serde(default)]
+    pub parent_id: Option<String>,
+    #[serde(default)]
+    pub child_ids: Vec<String>,
 }
 
 /// A snapshot entry combining its ID with metadata.
@@ -290,6 +298,8 @@ pub struct SnapshotEntry {
 pub struct SnapshotIndex {
     pub workspace_path: PathBuf,
     pub snapshots: HashMap<String, SnapshotMeta>,
+    #[serde(default)]
+    pub head: Option<String>,
 }
 
 impl SnapshotIndex {
@@ -297,7 +307,178 @@ impl SnapshotIndex {
         Self {
             workspace_path,
             snapshots: HashMap::new(),
+            head: None,
         }
+    }
+}
+
+impl SnapshotIndex {
+    /// Remove a single node from the DAG, reparenting its children to its parent.
+    pub fn unlink_node(&mut self, id: &str) {
+        let parent = self.snapshots.get(id).and_then(|m| m.parent_id.clone());
+        let children: Vec<String> = self
+            .snapshots
+            .get(id)
+            .map(|m| m.child_ids.clone())
+            .unwrap_or_default();
+
+        for cid in &children {
+            if cid == LIVE_CHILD {
+                continue;
+            }
+            if let Some(cm) = self.snapshots.get_mut(cid) {
+                cm.parent_id = parent.clone();
+            }
+        }
+        if let Some(ref pid) = parent {
+            if let Some(pm) = self.snapshots.get_mut(pid) {
+                pm.child_ids.retain(|c| c != id);
+                for cid in &children {
+                    if cid != LIVE_CHILD && !pm.child_ids.contains(cid) {
+                        pm.child_ids.push(cid.clone());
+                    }
+                }
+            }
+        }
+        if self.head.as_deref() == Some(id) {
+            self.head = parent.clone();
+            if let Some(ref nh) = self.head {
+                if let Some(m) = self.snapshots.get_mut(nh) {
+                    if !m.child_ids.contains(&LIVE_CHILD.to_string()) {
+                        m.child_ids.push(LIVE_CHILD.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    /// Remove a batch of nodes from the DAG, processing only boundary edges.
+    pub fn prune_chain(&mut self, ids: &HashSet<String>) {
+        let mut edges: Vec<(String, String)> = Vec::new();
+        let mut surviving_parents: Vec<(String, String)> = Vec::new();
+        for id in ids {
+            if let Some(meta) = self.snapshots.get(id) {
+                for cid in &meta.child_ids {
+                    if cid != LIVE_CHILD && !ids.contains(cid) {
+                        edges.push((cid.clone(), id.clone()));
+                    }
+                }
+                if let Some(ref pid) = meta.parent_id {
+                    if !ids.contains(pid) {
+                        surviving_parents.push((pid.clone(), id.clone()));
+                    }
+                }
+            }
+        }
+
+        for (parent_id, deleted_id) in &surviving_parents {
+            if let Some(pm) = self.snapshots.get_mut(parent_id) {
+                pm.child_ids.retain(|c| c != deleted_id);
+            }
+        }
+
+        for (child_id, deleted_parent) in &edges {
+            let mut sp = self
+                .snapshots
+                .get(deleted_parent)
+                .and_then(|m| m.parent_id.clone());
+            while let Some(ref pid) = sp {
+                if !ids.contains(pid) {
+                    break;
+                }
+                sp = self.snapshots.get(pid).and_then(|m| m.parent_id.clone());
+            }
+            if let Some(cm) = self.snapshots.get_mut(child_id) {
+                cm.parent_id = sp.clone();
+            }
+            if let Some(ref spid) = sp {
+                if let Some(pm) = self.snapshots.get_mut(spid) {
+                    if !pm.child_ids.contains(child_id) {
+                        pm.child_ids.push(child_id.clone());
+                    }
+                }
+            }
+        }
+
+        if let Some(ref h) = self.head.clone() {
+            if ids.contains(h) {
+                let mut p = self.snapshots.get(h).and_then(|m| m.parent_id.clone());
+                while let Some(ref pid) = p {
+                    if !ids.contains(pid) {
+                        break;
+                    }
+                    p = self.snapshots.get(pid).and_then(|m| m.parent_id.clone());
+                }
+                self.head = p;
+                if let Some(ref nh) = self.head {
+                    if let Some(m) = self.snapshots.get_mut(nh) {
+                        if !m.child_ids.contains(&LIVE_CHILD.to_string()) {
+                            m.child_ids.push(LIVE_CHILD.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Error type for ancestor traversal.
+#[derive(Debug, PartialEq, Eq)]
+pub enum AncestorError {
+    InvalidAncestors,
+    NoHead,
+    BrokenChain { depth: usize },
+    NotFound { at_id: String },
+}
+
+impl std::fmt::Display for AncestorError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidAncestors => write!(f, "num-ancestors must be >= 1"),
+            Self::NoHead => write!(
+                f,
+                "no head set — no lineage available, use --snapshot instead"
+            ),
+            Self::BrokenChain { depth } => {
+                write!(
+                    f,
+                    "lineage chain broken at depth {depth} (parent_id is None)"
+                )
+            }
+            Self::NotFound { at_id } => {
+                write!(f, "parent snapshot '{at_id}' not found in index")
+            }
+        }
+    }
+}
+
+impl SnapshotIndex {
+    /// Traverse the ancestor chain: n=1 returns head itself, n=2 returns head's parent, etc.
+    pub fn ancestor(&self, n: usize) -> Result<(&String, &SnapshotMeta), AncestorError> {
+        if n < 1 {
+            return Err(AncestorError::InvalidAncestors);
+        }
+        let head_id = self.head.as_ref().ok_or(AncestorError::NoHead)?;
+        let mut current_id = head_id;
+        for depth in 1..n {
+            let meta = self
+                .snapshots
+                .get(current_id)
+                .ok_or_else(|| AncestorError::NotFound {
+                    at_id: current_id.clone(),
+                })?;
+            current_id = meta
+                .parent_id
+                .as_ref()
+                .ok_or(AncestorError::BrokenChain { depth })?;
+        }
+        let meta = self
+            .snapshots
+            .get(current_id)
+            .ok_or_else(|| AncestorError::NotFound {
+                at_id: current_id.clone(),
+            })?;
+        Ok((current_id, meta))
     }
 }
 
@@ -1152,13 +1333,19 @@ mod tests {
     fn request_rollback_round_trip() {
         let req = Request::Rollback {
             workspace: "/tmp/ws".to_string(),
-            to: "msg1-step2".to_string(),
+            to: Some("msg1-step2".to_string()),
+            num_ancestors: None,
         };
         let decoded = round_trip_request(&req);
         match decoded {
-            Request::Rollback { workspace, to } => {
+            Request::Rollback {
+                workspace,
+                to,
+                num_ancestors,
+            } => {
                 assert_eq!(workspace, "/tmp/ws");
-                assert_eq!(to, "msg1-step2");
+                assert_eq!(to.as_deref(), Some("msg1-step2"));
+                assert_eq!(num_ancestors, None);
             }
             _ => panic!("expected Rollback variant"),
         }
@@ -1383,6 +1570,8 @@ mod tests {
                 pinned: true,
                 created_at: chrono::Utc::now(),
                 missing: false,
+                parent_id: None,
+                child_ids: vec![],
             },
         );
         let result = idx.resolve_by_prefix("abcdef1234567890abcdef1234567890abcdef12");
@@ -1402,6 +1591,8 @@ mod tests {
                 pinned: false,
                 created_at: chrono::Utc::now(),
                 missing: false,
+                parent_id: None,
+                child_ids: vec![],
             },
         );
         let result = idx.resolve_by_prefix("abcdef");
@@ -1426,6 +1617,8 @@ mod tests {
                 pinned: false,
                 created_at: chrono::Utc::now(),
                 missing: false,
+                parent_id: None,
+                child_ids: vec![],
             },
         );
         idx.snapshots.insert(
@@ -1436,10 +1629,131 @@ mod tests {
                 pinned: false,
                 created_at: chrono::Utc::now(),
                 missing: false,
+                parent_id: None,
+                child_ids: vec![],
             },
         );
         let result = idx.resolve_by_prefix("abcdef");
         assert_eq!(result.unwrap_err(), ResolveError::Ambiguous(2));
+    }
+
+    // ── SnapshotIndex::ancestor() tests ──
+
+    fn make_chain_index() -> SnapshotIndex {
+        let mut idx = SnapshotIndex::new(PathBuf::from("/ws"));
+        idx.snapshots.insert(
+            "snap-a".to_string(),
+            SnapshotMeta {
+                message: None,
+                metadata: None,
+                pinned: false,
+                created_at: chrono::Utc::now(),
+                missing: false,
+                parent_id: None,
+                child_ids: vec![],
+            },
+        );
+        idx.snapshots.insert(
+            "snap-b".to_string(),
+            SnapshotMeta {
+                message: None,
+                metadata: None,
+                pinned: false,
+                created_at: chrono::Utc::now(),
+                missing: false,
+                parent_id: Some("snap-a".to_string()),
+                child_ids: vec![],
+            },
+        );
+        idx.snapshots.insert(
+            "snap-c".to_string(),
+            SnapshotMeta {
+                message: None,
+                metadata: None,
+                pinned: false,
+                created_at: chrono::Utc::now(),
+                missing: false,
+                parent_id: Some("snap-b".to_string()),
+                child_ids: vec![],
+            },
+        );
+        idx.head = Some("snap-c".to_string());
+        idx
+    }
+
+    #[test]
+    fn ancestor_zero_returns_error() {
+        let idx = make_chain_index();
+        assert_eq!(
+            idx.ancestor(0).unwrap_err(),
+            AncestorError::InvalidAncestors
+        );
+    }
+
+    #[test]
+    fn ancestor_one_returns_head() {
+        let idx = make_chain_index();
+        let (id, _) = idx.ancestor(1).unwrap();
+        assert_eq!(id, "snap-c");
+    }
+
+    #[test]
+    fn ancestor_two_returns_parent() {
+        let idx = make_chain_index();
+        let (id, _) = idx.ancestor(2).unwrap();
+        assert_eq!(id, "snap-b");
+    }
+
+    #[test]
+    fn ancestor_three_returns_grandparent() {
+        let idx = make_chain_index();
+        let (id, _) = idx.ancestor(3).unwrap();
+        assert_eq!(id, "snap-a");
+    }
+
+    #[test]
+    fn ancestor_exceeds_chain_returns_broken_chain() {
+        let idx = make_chain_index();
+        let err = idx.ancestor(4).unwrap_err();
+        assert_eq!(err, AncestorError::BrokenChain { depth: 3 });
+    }
+
+    #[test]
+    fn ancestor_no_head_returns_error() {
+        let idx = SnapshotIndex::new(PathBuf::from("/ws"));
+        assert_eq!(idx.ancestor(1).unwrap_err(), AncestorError::NoHead);
+    }
+
+    #[test]
+    fn ancestor_broken_chain_mid_traversal() {
+        let mut idx = SnapshotIndex::new(PathBuf::from("/ws"));
+        idx.snapshots.insert(
+            "orphan".to_string(),
+            SnapshotMeta {
+                message: None,
+                metadata: None,
+                pinned: false,
+                created_at: chrono::Utc::now(),
+                missing: false,
+                parent_id: None,
+                child_ids: vec![],
+            },
+        );
+        idx.snapshots.insert(
+            "child".to_string(),
+            SnapshotMeta {
+                message: None,
+                metadata: None,
+                pinned: false,
+                created_at: chrono::Utc::now(),
+                missing: false,
+                parent_id: Some("orphan".to_string()),
+                child_ids: vec![],
+            },
+        );
+        idx.head = Some("child".to_string());
+        let err = idx.ancestor(3).unwrap_err();
+        assert_eq!(err, AncestorError::BrokenChain { depth: 2 });
     }
 
     // ── DaemonConfig::default() tests ──
@@ -1613,6 +1927,8 @@ mod tests {
                     pinned: true,
                     created_at: chrono::Utc::now(),
                     missing: false,
+                    parent_id: None,
+                    child_ids: vec![],
                 },
             }],
         };
@@ -1637,6 +1953,8 @@ mod tests {
                 pinned: false,
                 created_at: chrono::Utc::now(),
                 missing: false,
+                parent_id: None,
+                child_ids: vec![],
             },
         };
         let serialized = serde_json::to_string(&entry).unwrap();
@@ -1662,6 +1980,8 @@ mod tests {
                     pinned: false,
                     created_at: chrono::Utc::now(),
                     missing: false,
+                    parent_id: None,
+                    child_ids: vec![],
                 },
             }],
         };
@@ -1685,6 +2005,8 @@ mod tests {
             pinned: false,
             created_at: chrono::Utc::now(),
             missing: false,
+            parent_id: None,
+            child_ids: vec![],
         };
         // JSON path
         let json = serde_json::to_string(&meta).unwrap();
@@ -1707,6 +2029,8 @@ mod tests {
             pinned: false,
             created_at: chrono::Utc::now(),
             missing: false,
+            parent_id: None,
+            child_ids: vec![],
         };
         let s = serde_json::to_string(&meta).unwrap();
         // metadata is rendered as an object, not as an escaped string
@@ -2391,5 +2715,181 @@ mod tests {
             }
             _ => panic!("expected HealthAdvisoryOk variant"),
         }
+    }
+
+    // ── unlink_node tests ──
+
+    fn meta(parent: Option<&str>, children: Vec<&str>) -> SnapshotMeta {
+        SnapshotMeta {
+            message: None,
+            metadata: None,
+            pinned: false,
+            created_at: chrono::Utc::now(),
+            missing: false,
+            parent_id: parent.map(|s| s.to_string()),
+            child_ids: children.into_iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn unlink_node_reparents_children() {
+        // A←B←C(head+live), delete B → C.parent=A, A.child_ids=[C], head unchanged
+        let mut idx = SnapshotIndex::new(PathBuf::from("/ws"));
+        idx.snapshots.insert("a".into(), meta(None, vec!["b"]));
+        idx.snapshots.insert("b".into(), meta(Some("a"), vec!["c"]));
+        idx.snapshots
+            .insert("c".into(), meta(Some("b"), vec![LIVE_CHILD]));
+        idx.head = Some("c".into());
+
+        idx.unlink_node("b");
+
+        assert_eq!(idx.snapshots["c"].parent_id.as_deref(), Some("a"));
+        assert_eq!(idx.snapshots["a"].child_ids, vec!["c"]);
+        assert_eq!(idx.head.as_deref(), Some("c"));
+    }
+
+    #[test]
+    fn unlink_node_updates_head_and_migrates_live() {
+        // A←B←C(head+live), delete C → head=B, B gets LIVE_CHILD
+        let mut idx = SnapshotIndex::new(PathBuf::from("/ws"));
+        idx.snapshots.insert("a".into(), meta(None, vec!["b"]));
+        idx.snapshots.insert("b".into(), meta(Some("a"), vec!["c"]));
+        idx.snapshots
+            .insert("c".into(), meta(Some("b"), vec![LIVE_CHILD]));
+        idx.head = Some("c".into());
+
+        idx.unlink_node("c");
+
+        assert_eq!(idx.head.as_deref(), Some("b"));
+        assert!(idx.snapshots["b"]
+            .child_ids
+            .contains(&LIVE_CHILD.to_string()));
+    }
+
+    #[test]
+    fn unlink_node_branching() {
+        // A←B, A←C, delete A → B.parent=None, C.parent=None (forest)
+        let mut idx = SnapshotIndex::new(PathBuf::from("/ws"));
+        idx.snapshots.insert("a".into(), meta(None, vec!["b", "c"]));
+        idx.snapshots.insert("b".into(), meta(Some("a"), vec![]));
+        idx.snapshots.insert("c".into(), meta(Some("a"), vec![]));
+        idx.head = Some("b".into());
+
+        idx.unlink_node("a");
+
+        assert_eq!(idx.snapshots["b"].parent_id, None);
+        assert_eq!(idx.snapshots["c"].parent_id, None);
+    }
+
+    #[test]
+    fn unlink_node_root() {
+        // A(root)←B(head+live), delete A → B.parent=None, head unchanged
+        let mut idx = SnapshotIndex::new(PathBuf::from("/ws"));
+        idx.snapshots.insert("a".into(), meta(None, vec!["b"]));
+        idx.snapshots
+            .insert("b".into(), meta(Some("a"), vec![LIVE_CHILD]));
+        idx.head = Some("b".into());
+
+        idx.unlink_node("a");
+
+        assert_eq!(idx.snapshots["b"].parent_id, None);
+        assert_eq!(idx.head.as_deref(), Some("b"));
+    }
+
+    // ── prune_chain tests ──
+
+    #[test]
+    fn prune_chain_tail() {
+        // A←B←C←D←E(head+live), delete {A,B} → C.parent=None, head unchanged
+        let mut idx = SnapshotIndex::new(PathBuf::from("/ws"));
+        idx.snapshots.insert("a".into(), meta(None, vec!["b"]));
+        idx.snapshots.insert("b".into(), meta(Some("a"), vec!["c"]));
+        idx.snapshots.insert("c".into(), meta(Some("b"), vec!["d"]));
+        idx.snapshots.insert("d".into(), meta(Some("c"), vec!["e"]));
+        idx.snapshots
+            .insert("e".into(), meta(Some("d"), vec![LIVE_CHILD]));
+        idx.head = Some("e".into());
+
+        let ids: HashSet<String> = ["a", "b"].iter().map(|s| s.to_string()).collect();
+        idx.prune_chain(&ids);
+
+        assert_eq!(idx.snapshots["c"].parent_id, None);
+        assert_eq!(idx.head.as_deref(), Some("e"));
+    }
+
+    #[test]
+    fn prune_chain_includes_head() {
+        // A←B←C(head+live), delete {B,C} → head=A, A gets LIVE_CHILD
+        let mut idx = SnapshotIndex::new(PathBuf::from("/ws"));
+        idx.snapshots.insert("a".into(), meta(None, vec!["b"]));
+        idx.snapshots.insert("b".into(), meta(Some("a"), vec!["c"]));
+        idx.snapshots
+            .insert("c".into(), meta(Some("b"), vec![LIVE_CHILD]));
+        idx.head = Some("c".into());
+
+        let ids: HashSet<String> = ["b", "c"].iter().map(|s| s.to_string()).collect();
+        idx.prune_chain(&ids);
+
+        assert_eq!(idx.head.as_deref(), Some("a"));
+        let a_children = &idx.snapshots["a"].child_ids;
+        assert!(a_children.contains(&LIVE_CHILD.to_string()));
+        assert!(!a_children.contains(&"b".to_string()));
+        assert_eq!(a_children.len(), 1);
+    }
+
+    #[test]
+    fn prune_chain_skip_middle() {
+        // A←B←C←D(head+live), delete {B,C} → D.parent=A, A.child_ids=[D]
+        let mut idx = SnapshotIndex::new(PathBuf::from("/ws"));
+        idx.snapshots.insert("a".into(), meta(None, vec!["b"]));
+        idx.snapshots.insert("b".into(), meta(Some("a"), vec!["c"]));
+        idx.snapshots.insert("c".into(), meta(Some("b"), vec!["d"]));
+        idx.snapshots
+            .insert("d".into(), meta(Some("c"), vec![LIVE_CHILD]));
+        idx.head = Some("d".into());
+
+        let ids: HashSet<String> = ["b", "c"].iter().map(|s| s.to_string()).collect();
+        idx.prune_chain(&ids);
+
+        assert_eq!(idx.snapshots["d"].parent_id.as_deref(), Some("a"));
+        assert!(idx.snapshots["a"].child_ids.contains(&"d".to_string()));
+        assert!(!idx.snapshots["a"].child_ids.iter().any(|c| ids.contains(c)));
+    }
+
+    #[test]
+    fn prune_chain_creates_forest() {
+        // a←b←c←d→{e←f, g←h←i, j←k→{l, m(head+live)←n}}
+        // delete {a,b,c,d,e,g,j} → f,h,k parent=None (3 trees)
+        let mut idx = SnapshotIndex::new(PathBuf::from("/ws"));
+        idx.snapshots.insert("a".into(), meta(None, vec!["b"]));
+        idx.snapshots.insert("b".into(), meta(Some("a"), vec!["c"]));
+        idx.snapshots.insert("c".into(), meta(Some("b"), vec!["d"]));
+        idx.snapshots
+            .insert("d".into(), meta(Some("c"), vec!["e", "g", "j"]));
+        idx.snapshots.insert("e".into(), meta(Some("d"), vec!["f"]));
+        idx.snapshots.insert("f".into(), meta(Some("e"), vec![]));
+        idx.snapshots.insert("g".into(), meta(Some("d"), vec!["h"]));
+        idx.snapshots.insert("h".into(), meta(Some("g"), vec!["i"]));
+        idx.snapshots.insert("i".into(), meta(Some("h"), vec![]));
+        idx.snapshots.insert("j".into(), meta(Some("d"), vec!["k"]));
+        idx.snapshots
+            .insert("k".into(), meta(Some("j"), vec!["l", "m"]));
+        idx.snapshots.insert("l".into(), meta(Some("k"), vec![]));
+        idx.snapshots
+            .insert("m".into(), meta(Some("k"), vec![LIVE_CHILD, "n"]));
+        idx.snapshots.insert("n".into(), meta(Some("m"), vec![]));
+        idx.head = Some("m".into());
+
+        let ids: HashSet<String> = ["a", "b", "c", "d", "e", "g", "j"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        idx.prune_chain(&ids);
+
+        assert_eq!(idx.snapshots["f"].parent_id, None);
+        assert_eq!(idx.snapshots["h"].parent_id, None);
+        assert_eq!(idx.snapshots["k"].parent_id, None);
+        assert_eq!(idx.head.as_deref(), Some("m"));
+        assert!(idx.snapshots["n"].parent_id.as_deref() == Some("m"));
     }
 }

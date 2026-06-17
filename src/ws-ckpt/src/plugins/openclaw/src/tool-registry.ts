@@ -118,15 +118,23 @@ export function registerTools(api: OpenClawPluginApi): void {
     {
       name: "ws-ckpt-rollback",
       description:
-        "Roll back the workspace to a previous snapshot. Always call " +
-        "ws-ckpt-list first to confirm the target snapshot id exists; " +
-        "never roll back to an id you haven't verified.",
+        "Roll back the workspace to a previous snapshot or N ancestors back. " +
+        "Always call ws-ckpt-list first to confirm the target snapshot id " +
+        "exists; never roll back to an id you haven't verified.",
       parameters: {
         type: "object",
         properties: {
           target: {
             type: "string",
-            description: "Snapshot id to roll back to.",
+            description:
+              "Snapshot id to roll back to (mutually exclusive with numAncestors).",
+          },
+          numAncestors: {
+            type: "integer",
+            description:
+              "Number of steps to go back " +
+              "(>=1, mutually exclusive with target). " +
+              "1 = undo last turn, 2 = undo last two turns.",
           },
           workspace: {
             type: "string",
@@ -136,12 +144,12 @@ export function registerTools(api: OpenClawPluginApi): void {
               "link itself — do NOT replace it with the resolved real path.",
           },
         },
-        required: ["target"],
       },
       async execute(_toolCallId, params) {
         const r = await handleRollback(
           params.target as string | undefined,
           params.workspace as string | undefined,
+          params.numAncestors as number | undefined,
         );
         return textToolResult(r.text, r.isError);
       },

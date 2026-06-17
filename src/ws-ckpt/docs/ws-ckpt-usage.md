@@ -39,7 +39,9 @@ ws-ckpt checkpoint -w ws-6d5aaa -i test --metadata '{"tool":"write","file":"main
 
 ```
 
-### 2.2 回滚到指定快照
+### 2.2 回滚快照
+
+#### 2.2.1 回滚到指定快照
 
 ```bash
 ws-ckpt rollback -w <workspace> -s <snapshot>
@@ -56,6 +58,30 @@ ws-ckpt rollback -w <workspace> -s <snapshot>
 # 按快照 ID 回滚
 ws-ckpt rollback -w ./my-project -s test
 ```
+
+#### 2.2.2 按祖先链回滚
+
+```bash
+ws-ckpt rollback -w <workspace> -n <N>
+```
+
+`--num-ancestors` 简写 `-n`，沿 parent 链回退 N 个祖先：
+- `-n 1`：回退到 head（上次 checkpoint）
+- `-n 2`：回退到 head 的 parent
+- `-n 3`：回退到 head.parent.parent
+
+与 `--snapshot/-s` 互斥。
+
+**示例**：
+
+```bash
+# 回退到上次快照
+ws-ckpt rollback -w ./my-project -n 1
+# 回退两步
+ws-ckpt rollback -w ./my-project -n 2
+```
+
+> **注意**：对于升级前创建的旧快照（无血缘信息），`-n` 会返回错误，需使用 `-s` 指定目标快照 ID。
 
 ### 2.3 列出快照
 

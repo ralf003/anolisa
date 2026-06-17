@@ -270,15 +270,26 @@ WS_CKPT_CHECKPOINT_SCHEMA: Dict[str, Any] = {
 WS_CKPT_ROLLBACK_SCHEMA: Dict[str, Any] = {
     "name": "ws-ckpt-rollback",
     "description": (
-        "Roll back the workspace to a specific checkpoint. Use ws-ckpt-list "
-        "first to see available snapshots."
+        "Roll back the workspace to a specific checkpoint or N ancestors back. "
+        "Use ws-ckpt-list first to see available snapshots."
     ),
     "parameters": {
         "type": "object",
         "properties": {
             "target": {
                 "type": "string",
-                "description": "Snapshot id to roll back to.",
+                "description": (
+                    "Snapshot id to roll back to (mutually exclusive with "
+                    "num_ancestors)."
+                ),
+            },
+            "num_ancestors": {
+                "type": "integer",
+                "description": (
+                    "Number of steps to go back "
+                    "(>=1, mutually exclusive with target). "
+                    "1 = undo last turn, 2 = undo last two turns."
+                ),
             },
             "workspace": {
                 "type": "string",
@@ -289,7 +300,6 @@ WS_CKPT_ROLLBACK_SCHEMA: Dict[str, Any] = {
                 ),
             },
         },
-        "required": ["target"],
         "additionalProperties": False,
     },
 }
@@ -652,8 +662,19 @@ def handle_ws_ckpt_checkpoint(args: Dict[str, Any], **_kwargs) -> str:
 def handle_ws_ckpt_rollback(args: Dict[str, Any], **_kwargs) -> str:
     """Handle ws-ckpt-rollback tool call."""
     target = (args.get("target") or "").strip()
-    if not target:
-        return _err("'target' is required")
+    num_ancestors = args.get("num_ancestors")
+
+    if target and num_ancestors is not None:
+        return _err("'target' and 'num_ancestors' are mutually exclusive")
+    if not target and num_ancestors is None:
+        return _err("either 'target' or 'num_ancestors' is required")
+    if num_ancestors is not None:
+        try:
+            num_ancestors = int(num_ancestors)
+        except (ValueError, TypeError):
+            return _err("'num_ancestors' must be an integer >= 1")
+    if num_ancestors is not None and num_ancestors < 1:
+        return _err("'num_ancestors' must be >= 1")
 
     workspace, ws_err = _resolve_workspace(args)
     if ws_err:
@@ -662,7 +683,12 @@ def handle_ws_ckpt_rollback(args: Dict[str, Any], **_kwargs) -> str:
     if rejection:
         return rejection
 
-    cmd = ["ws-ckpt", "rollback", "-w", workspace, "-s", target]
+    if num_ancestors is not None:
+        # Plugin snapshots after each response, so head == current state;
+        # +1 so user's "go back 1 step" skips the head snapshot.
+        cmd = ["ws-ckpt", "rollback", "-w", workspace, "-n", str(int(num_ancestors) + 1)]
+    else:
+        cmd = ["ws-ckpt", "rollback", "-w", workspace, "-s", target]
     success, output = _run_ws_ckpt_cmd(cmd)
     return _ok(output) if success else _err(output)
 
