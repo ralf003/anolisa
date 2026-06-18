@@ -1,26 +1,21 @@
-//! Generic osbase install entry layer.
+//! Generic osbase install entry layer — TOML-manifest-driven.
 //!
-//! Provides a domain-agnostic surface (`Kernel` / `Sandbox` / `Security`) on
-//! top of the existing per-domain pipelines. The `Sandbox` domain bridges
-//! into the mature [`crate::sandbox_install`] 5-phase orchestrator without
-//! modifying it; `Kernel` and `Security` are stubs pending dedicated
-//! pipelines.
+//! The install pipeline reads scenario definitions from `sandbox.toml`
+//! (deployed by `anolisa system setup` to `/etc/anolisa/sandbox.toml`)
+//! and executes a simplified 3-step flow:
 //!
-//! Design references:
-//! - osbase install task pool (Task #4): generalized entry layer
-//! - manifest v2 `[[support_matrix]]` / `[scenario_defaults]` (Task #6)
+//!   1. Preflight — kernel version gate, KVM check if required
+//!   2. Packages  — `dnf install -y <packages>` from manifest
+//!   3. Hint      — print optional packages if any
 //!
-//! The CLI handler should migrate to [`execute_install`] over time; the
-//! existing `sandbox_install::execute_sandbox_install` API is retained as a
-//! deprecated re-export from [`crate`] to give callers a transition window.
+//! The old 5-phase pipeline in `sandbox_install.rs` is no longer invoked
+//! from this path.  `Kernel` and `Security` domains remain stubs.
+
+use std::process::Command;
 
 use anolisa_env::EnvFacts;
-use anolisa_platform::fs_layout::FsLayout;
 
-use crate::sandbox_install::{
-    self, SandboxBackendKind, SandboxInstallError, SandboxInstallOutcome, SandboxInstallRequest,
-};
-use crate::support_matrix::UnsupportedError;
+use crate::sandbox_manifest::{ManifestError, SandboxManifest, ScenarioConfig};
 
 // ===========================================================================
 // Public types
@@ -32,7 +27,7 @@ use crate::support_matrix::UnsupportedError;
 pub enum OsbaseDomain {
     /// Linux kernel variants (e.g. `agentic`, `vanilla`).
     Kernel,
-    /// Sandbox engines (runc / rund / kata-* / gvisor / firecracker / landlock).
+    /// Sandbox engines (runc / rund / firecracker / gvisor / landlock).
     Sandbox,
     /// Security primitives (LSMs, audit, seccomp profiles).
     Security,
@@ -50,11 +45,6 @@ impl OsbaseDomain {
 }
 
 /// Whether to register the engine into a containerd handler entry.
-///
-/// Mirrors `sandbox_install::SandboxInstallRequest::runtime` in a typed form
-/// so callers don't pass stringly-typed runtime names through the entry
-/// layer. Only `Containerd` is currently meaningful; `None` means standalone
-/// (no L2 wiring).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RegisterHandler {
     /// Register with containerd via the appropriate shim.
@@ -65,25 +55,19 @@ pub enum RegisterHandler {
 }
 
 /// Generic install request for any osbase domain.
-///
-/// The CLI translates `anolisa install <domain> <target> [flags]` into this
-/// struct. `target` carries the scenario name (Sandbox: `runc`, `rund`,
-/// `kata-clh`, `gvisor`, ...) or the kernel variant (`agentic`, `vanilla`).
 #[derive(Debug, Clone)]
 pub struct OsbaseInstallRequest {
     /// Which domain pipeline to dispatch to.
     pub domain: OsbaseDomain,
     /// Scenario name (Sandbox) or variant (Kernel/Security). Must be
-    /// non-empty; matched against the manifest set in the dispatch step.
+    /// non-empty; matched against the manifest.
     pub target: String,
-    /// L2 handler registration mode. Ignored for `Kernel` and `Security`
-    /// (a warning is surfaced if non-default).
+    /// L2 handler registration mode.
     pub register_handler: RegisterHandler,
     /// Additionally create a Kubernetes `RuntimeClass` after handler
-    /// registration. Requires `register_handler != None`.
+    /// registration.
     pub register_runtimeclass: bool,
-    /// Optional `--config` override path passed through to the domain
-    /// pipeline. Currently informational — ignored by the sandbox bridge.
+    /// Optional `--config` override path.
     pub config_override: Option<String>,
     /// Mark the installed engine as the default runtime for its handler.
     pub set_default: bool,
@@ -101,17 +85,12 @@ pub struct OsbaseInstallOutcome {
     pub domain: OsbaseDomain,
     pub target: String,
     pub phases: Vec<PhaseResult>,
-    /// `0` success, `1` failed, `2` degraded. Mirrors the sandbox-subsystem
-    /// exit-code table after collapsing the `Skipped`/`Warning` distinction.
+    /// `0` success, `1` failed, `2` degraded.
     pub exit_code: i32,
     pub warnings: Vec<String>,
 }
 
-/// Per-phase result in domain-agnostic shape.
-///
-/// Phase names align with the sandbox 5-phase pipeline so JSON consumers can
-/// keep a single schema across domains:
-/// `preflight` / `packages` / `os_primitives` / `service_setup` / `post_verify`.
+/// Per-phase result.
 #[derive(Debug, Clone)]
 pub struct PhaseResult {
     pub name: String,
@@ -132,18 +111,17 @@ pub enum PhaseStatus {
 /// Errors surfaced by the generic install entry.
 #[derive(Debug, thiserror::Error)]
 pub enum OsbaseInstallError {
-    /// The `(env, target)` pair did not match any `[[support_matrix]]` row.
     #[error("unsupported: {0}")]
-    Unsupported(#[from] UnsupportedError),
+    Unsupported(String),
 
-    /// Request shape is invalid before any dispatch happens.
     #[error("invalid request: {reason}")]
     InvalidRequest { reason: String },
 
-    /// A pipeline phase failed; the inner pipeline is responsible for
-    /// best-effort rollback before this is surfaced.
     #[error("phase '{phase}' failed: {message}")]
     PhaseFailed { phase: String, message: String },
+
+    #[error("manifest error: {0}")]
+    Manifest(#[from] ManifestError),
 
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
@@ -154,12 +132,6 @@ pub enum OsbaseInstallError {
 // ===========================================================================
 
 /// Validate the request and dispatch to the appropriate domain pipeline.
-///
-/// `env` carries the host facts (`os_id`, `os_version`, `arch`, `kernel`)
-/// consumed by support-matrix matching inside each domain pipeline.
-///
-/// Currently only the `Sandbox` domain is wired; `Kernel` and `Security`
-/// return [`OsbaseInstallError::InvalidRequest`] until their pipelines land.
 pub fn execute_install(
     request: &OsbaseInstallRequest,
     env: &EnvFacts,
@@ -177,19 +149,13 @@ pub fn execute_install(
     }
 }
 
-/// Lightweight request validation — runs before any side effect.
-///
-/// Hard rejections:
-/// - empty `target`
-/// - `register_runtimeclass=true` with `register_handler=None` (no handler
-///   to attach the RuntimeClass to)
-/// - `env.uid != 0` (osbase is implicitly system-mode; defensive check
-///   that mirrors the CLI-layer guard for callers that bypass
-///   `anolisa-cli` — library users, integration tests, future REST
-///   front-ends)
-///
-/// Soft warnings (returned via the `Ok` outcome would require a logger; we
-/// instead surface them through the dispatch layer on a successful run).
+/// List all available scenarios from the manifest.
+pub fn list_scenarios() -> Result<Vec<String>, OsbaseInstallError> {
+    let manifest = SandboxManifest::load()?;
+    Ok(manifest.scenario_names().into_iter().map(String::from).collect())
+}
+
+/// Lightweight request validation.
 pub fn validate_request(
     request: &OsbaseInstallRequest,
     env: &EnvFacts,
@@ -206,13 +172,6 @@ pub fn validate_request(
         });
     }
 
-    // Defense-in-depth: the CLI dispatcher (`commands/osbase.rs`) already
-    // rejects non-root invocations with a `PermissionDenied` envelope.
-    // Repeat the check here so library callers — tests, future REST
-    // front-ends, anything that calls `execute_install` directly —
-    // can't slip past the privilege gate. Surfaced as `InvalidRequest`
-    // (not a new variant) to keep the error model stable; the message
-    // points at `sudo` so non-CLI callers still get an actionable hint.
     if env.uid != 0 {
         return Err(OsbaseInstallError::InvalidRequest {
             reason: "osbase requires root (uid=0); re-run with sudo".to_string(),
@@ -223,231 +182,262 @@ pub fn validate_request(
 }
 
 // ===========================================================================
-// Sandbox bridge
+// Sandbox dispatch — manifest-driven
 // ===========================================================================
 
-/// Mapping from a sandbox scenario name to the legacy
-/// `(SandboxBackendKind, variant, runtime, control_panel)` tuple consumed by
-/// `sandbox_install::execute_sandbox_install`.
-struct SandboxScenario {
-    backend: SandboxBackendKind,
-    variant: &'static str,
-    /// `Some(rt)` defaults the runtime if the caller asked for handler
-    /// registration; `None` means the engine has no L2 wiring at all
-    /// (firecracker / landlock).
-    runtime: Option<&'static str>,
-    control_panel: Option<&'static str>,
-}
-
-/// Resolve a scenario name (`runc`, `rund`, `kata-clh`, `gvisor`, ...) to
-/// the existing sandbox backend tuple. Returns `None` for unknown scenarios
-/// — the caller turns this into [`OsbaseInstallError::InvalidRequest`].
-fn resolve_sandbox_scenario(target: &str) -> Option<SandboxScenario> {
-    let (backend, variant, runtime, control_panel) = match target {
-        "runc" => (
-            SandboxBackendKind::Container,
-            "runc",
-            Some("containerd"),
-            None,
-        ),
-        "rund" => (SandboxBackendKind::Kata, "rund", Some("containerd"), None),
-        "kata-qemu" => (SandboxBackendKind::Kata, "qemu", Some("containerd"), None),
-        "kata-clh" => (SandboxBackendKind::Kata, "clh", Some("containerd"), None),
-        "kata-fc" => (SandboxBackendKind::Firecracker, "kata-fc", None, None),
-        "firecracker" => (SandboxBackendKind::Firecracker, "standard", None, None),
-        "gvisor" => (
-            SandboxBackendKind::Gvisor,
-            "default",
-            Some("containerd"),
-            None,
-        ),
-        "gvisor-substrate" => (
-            SandboxBackendKind::Gvisor,
-            "default",
-            Some("containerd"),
-            Some("substrate"),
-        ),
-        "landlock" => (SandboxBackendKind::Landlock, "default", None, None),
-        _ => return None,
-    };
-    Some(SandboxScenario {
-        backend,
-        variant,
-        runtime,
-        control_panel,
-    })
-}
-
-/// Translate the generic request into a [`SandboxInstallRequest`] and call
-/// the legacy 5-phase pipeline. The [`FsLayout`] is taken as the
-/// system-default (`FsLayout::system(None)`); the CLI front-end will
-/// eventually pass its own layout through, at which point this helper grows
-/// a `layout` parameter — keep the bridge thin until then.
+/// Load the manifest, find the scenario, and run the simplified install.
 fn sandbox_dispatch(
     request: &OsbaseInstallRequest,
-    _env: &EnvFacts,
+    env: &EnvFacts,
 ) -> Result<OsbaseInstallOutcome, OsbaseInstallError> {
-    let scenario = resolve_sandbox_scenario(&request.target).ok_or_else(|| {
+    let manifest = SandboxManifest::load()?;
+
+    let scenario = manifest.find_scenario(&request.target).ok_or_else(|| {
+        let available = manifest.scenario_names().join(", ");
         OsbaseInstallError::InvalidRequest {
-            reason: format!("unknown sandbox scenario '{}'", request.target),
+            reason: format!(
+                "unknown sandbox scenario '{}'; available: [{}]",
+                request.target, available
+            ),
         }
     })?;
 
-    // Map register_handler → runtime. `Containerd` keeps the scenario's
-    // default runtime (None for engines that bypass L2); `None` forces
-    // standalone even when the scenario has a default.
-    let runtime = match request.register_handler {
-        RegisterHandler::Containerd => scenario.runtime.map(str::to_string),
-        RegisterHandler::None => None,
-    };
+    // Clone what we need before running phases (avoid borrow issues)
+    let scenario = scenario.clone();
 
-    let mut warnings: Vec<String> = Vec::new();
-    if request.config_override.is_some() {
-        warnings.push("--config override is not yet honored by the sandbox bridge".to_string());
-    }
-    if request.set_default {
-        warnings.push("--default is not yet honored by the sandbox bridge".to_string());
-    }
-    if request.register_runtimeclass {
-        warnings
-            .push("--register-runtimeclass is not yet honored by the sandbox bridge".to_string());
+    if request.dry_run {
+        return Ok(build_dry_run_outcome(request, &scenario));
     }
 
-    let sandbox_req = SandboxInstallRequest {
-        backend: scenario.backend,
-        variant: scenario.variant.to_string(),
-        runtime,
-        control_panel: scenario.control_panel.map(str::to_string),
-        dry_run: request.dry_run,
-        force: request.force,
-        no_verify: request.skip_verify,
-        json: false,
-    };
-
-    // TODO(osbase-install): plumb FsLayout through `execute_install` once
-    // the CLI layer is migrated. Defaulting to system layout matches the
-    // pre-existing `anolisa install` behaviour.
-    let layout = FsLayout::system(None);
-
-    match sandbox_install::execute_sandbox_install(&sandbox_req, &layout) {
-        Ok(outcome) => Ok(map_sandbox_outcome(request, outcome, warnings)),
-        Err(err) => Err(map_sandbox_error(request, err)),
-    }
+    run_manifest_install(request, env, &scenario)
 }
 
-/// Translate the legacy [`SandboxInstallOutcome`] into the generic shape.
-fn map_sandbox_outcome(
+/// Build a dry-run outcome showing what would happen.
+fn build_dry_run_outcome(
     request: &OsbaseInstallRequest,
-    outcome: SandboxInstallOutcome,
-    mut warnings: Vec<String>,
+    scenario: &ScenarioConfig,
 ) -> OsbaseInstallOutcome {
-    warnings.extend(outcome.warnings);
+    let mut phases = Vec::new();
 
-    let phases = outcome
-        .phases
-        .into_iter()
-        .map(|p| PhaseResult {
-            name: phase_to_name(p.phase).to_string(),
-            status: map_phase_status(p.status),
-            message: if p.message.is_empty() {
-                None
-            } else {
-                Some(p.message)
-            },
-            duration_ms: None,
-        })
-        .collect();
+    // Preflight
+    let mut preflight_msg = format!("check kernel {}", scenario.requires_kernel);
+    if scenario.requires_kvm {
+        preflight_msg.push_str("; check /dev/kvm");
+    }
+    phases.push(PhaseResult {
+        name: "preflight".to_string(),
+        status: PhaseStatus::Skipped,
+        message: Some(preflight_msg),
+        duration_ms: None,
+    });
 
-    let exit_code = match outcome.exit_code {
-        0 => 0,
-        2 => 2, // degraded
-        _ => 1, // failed (1 / 3 / 4 from the legacy table)
+    // Packages
+    let pkg_msg = if scenario.packages.is_empty() {
+        "no packages to install".to_string()
+    } else {
+        format!("dnf install -y {}", scenario.packages.join(" "))
     };
+    phases.push(PhaseResult {
+        name: "packages".to_string(),
+        status: PhaseStatus::Skipped,
+        message: Some(pkg_msg),
+        duration_ms: None,
+    });
+
+    // Optional hint
+    if !scenario.packages_optional.is_empty() {
+        phases.push(PhaseResult {
+            name: "optional_hint".to_string(),
+            status: PhaseStatus::Skipped,
+            message: Some(format!(
+                "optional: {}",
+                scenario.packages_optional.join(" ")
+            )),
+            duration_ms: None,
+        });
+    }
 
     OsbaseInstallOutcome {
         domain: request.domain,
         target: request.target.clone(),
         phases,
-        exit_code,
-        warnings,
+        exit_code: 0,
+        warnings: vec!["dry-run mode: no changes made".to_string()],
     }
 }
 
-/// Translate a legacy [`SandboxInstallError`] into the generic error type.
-fn map_sandbox_error(
+/// Execute the simplified manifest-driven install:
+/// 1. Preflight (kernel + KVM)
+/// 2. dnf install packages
+/// 3. Optional packages hint
+fn run_manifest_install(
     request: &OsbaseInstallRequest,
-    err: SandboxInstallError,
-) -> OsbaseInstallError {
-    match err {
-        SandboxInstallError::Unsupported { backend, variant } => {
-            OsbaseInstallError::InvalidRequest {
-                reason: format!(
-                    "scenario '{}' rejected by sandbox pipeline: {} {}",
-                    request.target, backend, variant
-                ),
-            }
+    env: &EnvFacts,
+    scenario: &ScenarioConfig,
+) -> Result<OsbaseInstallOutcome, OsbaseInstallError> {
+    let mut phases = Vec::new();
+    let mut warnings = Vec::new();
+
+    // ─── Phase 1: Preflight ──────────────────────────────────────────────
+    let preflight_result = run_preflight(env, scenario, request.force);
+    match preflight_result {
+        Ok(msg) => {
+            phases.push(PhaseResult {
+                name: "preflight".to_string(),
+                status: PhaseStatus::Success,
+                message: Some(msg),
+                duration_ms: None,
+            });
         }
-        SandboxInstallError::EnvNotSatisfied {
-            reason,
-            remediation,
-        } => {
-            let mut msg = reason;
-            if let Some(r) = remediation {
-                msg.push_str(" — ");
-                msg.push_str(&r);
-            }
-            OsbaseInstallError::PhaseFailed {
+        Err(reason) => {
+            phases.push(PhaseResult {
+                name: "preflight".to_string(),
+                status: PhaseStatus::Failed,
+                message: Some(reason.clone()),
+                duration_ms: None,
+            });
+            return Err(OsbaseInstallError::PhaseFailed {
                 phase: "preflight".to_string(),
-                message: msg,
+                message: reason,
+            });
+        }
+    }
+
+    // ─── Phase 2: Packages ───────────────────────────────────────────────
+    if scenario.packages.is_empty() {
+        phases.push(PhaseResult {
+            name: "packages".to_string(),
+            status: PhaseStatus::Skipped,
+            message: Some("no packages required for this scenario".to_string()),
+            duration_ms: None,
+        });
+    } else {
+        match run_dnf_install(&scenario.packages) {
+            Ok(msg) => {
+                phases.push(PhaseResult {
+                    name: "packages".to_string(),
+                    status: PhaseStatus::Success,
+                    message: Some(msg),
+                    duration_ms: None,
+                });
+            }
+            Err(reason) => {
+                phases.push(PhaseResult {
+                    name: "packages".to_string(),
+                    status: PhaseStatus::Failed,
+                    message: Some(reason.clone()),
+                    duration_ms: None,
+                });
+                return Err(OsbaseInstallError::PhaseFailed {
+                    phase: "packages".to_string(),
+                    message: reason,
+                });
             }
         }
-        SandboxInstallError::PackageFailed(m) => OsbaseInstallError::PhaseFailed {
-            phase: "packages".to_string(),
-            message: m,
-        },
-        SandboxInstallError::OsConfigFailed(m) => OsbaseInstallError::PhaseFailed {
-            phase: "os_primitives".to_string(),
-            message: m,
-        },
-        SandboxInstallError::ServiceFailed(m) => OsbaseInstallError::PhaseFailed {
-            phase: "service_setup".to_string(),
-            message: m,
-        },
-        SandboxInstallError::VerifyFailed(m) => OsbaseInstallError::PhaseFailed {
-            phase: "post_verify".to_string(),
-            message: m,
-        },
-        SandboxInstallError::LockHeld => OsbaseInstallError::InvalidRequest {
-            reason: "install lock held by another process".to_string(),
-        },
-        SandboxInstallError::StateFailed(m) => OsbaseInstallError::PhaseFailed {
-            phase: "state".to_string(),
-            message: m,
-        },
-        SandboxInstallError::NotRoot => OsbaseInstallError::InvalidRequest {
-            reason: "must run as root for system-mode install".to_string(),
-        },
     }
+
+    // ─── Phase 3: Optional packages hint ─────────────────────────────────
+    if !scenario.packages_optional.is_empty() {
+        let hint = format!(
+            "optional packages available: {}  (install manually if needed)",
+            scenario.packages_optional.join(" ")
+        );
+        warnings.push(hint.clone());
+        phases.push(PhaseResult {
+            name: "optional_hint".to_string(),
+            status: PhaseStatus::Success,
+            message: Some(hint),
+            duration_ms: None,
+        });
+    }
+
+    Ok(OsbaseInstallOutcome {
+        domain: request.domain,
+        target: request.target.clone(),
+        phases,
+        exit_code: 0,
+        warnings,
+    })
 }
 
-fn phase_to_name(phase: sandbox_install::InstallPhase) -> &'static str {
-    use sandbox_install::InstallPhase;
-    match phase {
-        InstallPhase::Preflight => "preflight",
-        InstallPhase::Packages => "packages",
-        InstallPhase::OsPrimitives => "os_primitives",
-        InstallPhase::ServiceSetup => "service_setup",
-        InstallPhase::PostVerify => "post_verify",
+// ===========================================================================
+// Phase implementations
+// ===========================================================================
+
+/// Preflight: check kernel version and KVM availability.
+fn run_preflight(env: &EnvFacts, scenario: &ScenarioConfig, force: bool) -> Result<String, String> {
+    let mut checks_passed = Vec::new();
+
+    // Kernel version check
+    match scenario.check_kernel(env.kernel.as_deref()) {
+        Ok(()) => {
+            checks_passed.push(format!(
+                "kernel {} satisfies {}",
+                env.kernel.as_deref().unwrap_or("unknown"),
+                scenario.requires_kernel
+            ));
+        }
+        Err(reason) => {
+            if force {
+                checks_passed.push(format!("kernel check FORCED (would fail: {reason})"));
+            } else {
+                return Err(reason);
+            }
+        }
     }
+
+    // KVM check
+    if scenario.requires_kvm {
+        if std::path::Path::new("/dev/kvm").exists() {
+            checks_passed.push("/dev/kvm available".to_string());
+        } else if force {
+            checks_passed.push("/dev/kvm NOT found (forced)".to_string());
+        } else {
+            return Err(
+                "/dev/kvm not found — this scenario requires KVM hardware virtualization"
+                    .to_string(),
+            );
+        }
+    }
+
+    Ok(checks_passed.join("; "))
 }
 
-fn map_phase_status(s: sandbox_install::PhaseStatus) -> PhaseStatus {
-    use sandbox_install::PhaseStatus as Legacy;
-    match s {
-        Legacy::Success => PhaseStatus::Success,
-        Legacy::Skipped => PhaseStatus::Skipped,
-        Legacy::Warning => PhaseStatus::Degraded,
-        Legacy::Failed => PhaseStatus::Failed,
+/// Execute `dnf install -y <packages>`.
+fn run_dnf_install(packages: &[String]) -> Result<String, String> {
+    let mut cmd = Command::new("dnf");
+    cmd.arg("install").arg("-y");
+    for pkg in packages {
+        cmd.arg(pkg);
+    }
+
+    let output = cmd
+        .output()
+        .map_err(|e| format!("failed to execute dnf: {e}"))?;
+
+    if output.status.success() {
+        Ok(format!(
+            "installed: {}",
+            packages.join(" ")
+        ))
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        // Check if packages are already installed (dnf exits 0 for already-installed,
+        // but let's handle the "nothing to do" case gracefully)
+        let combined = format!("{stdout}\n{stderr}");
+        if combined.contains("Nothing to do") || combined.contains("already installed") {
+            Ok(format!(
+                "packages already installed: {}",
+                packages.join(" ")
+            ))
+        } else {
+            Err(format!(
+                "dnf install failed (exit={}): {}",
+                output.status.code().unwrap_or(-1),
+                stderr.lines().take(5).collect::<Vec<_>>().join("\n")
+            ))
+        }
     }
 }
 
@@ -500,10 +490,6 @@ mod tests {
 
     #[test]
     fn validate_rejects_non_root_uid() {
-        // Defensive uid check belongs in validate_request: a library
-        // caller that builds a request manually (no CLI guard in front)
-        // must still be told to escalate before any pipeline phase
-        // touches /etc or /boot.
         let r = req(OsbaseDomain::Sandbox, "runc");
         let env = test_env(); // uid=1000
         match validate_request(&r, &env) {
@@ -541,29 +527,29 @@ mod tests {
         match err {
             OsbaseInstallError::InvalidRequest { reason } => {
                 assert!(reason.contains("nope-not-a-scenario"));
+                assert!(reason.contains("available"));
             }
             other => panic!("expected InvalidRequest, got {other:?}"),
         }
     }
 
     #[test]
-    fn known_scenarios_resolve() {
-        for s in [
-            "runc",
-            "rund",
-            "kata-qemu",
-            "kata-clh",
-            "kata-fc",
-            "firecracker",
-            "gvisor",
-            "gvisor-substrate",
-            "landlock",
-        ] {
-            assert!(
-                resolve_sandbox_scenario(s).is_some(),
-                "scenario '{s}' should resolve"
-            );
+    fn known_scenarios_resolve_dry_run() {
+        let env = root_env();
+        for s in ["runc", "rund", "firecracker", "gvisor", "landlock"] {
+            let r = req(OsbaseDomain::Sandbox, s);
+            let outcome = execute_install(&r, &env).expect(&format!("scenario '{s}' should work"));
+            assert_eq!(outcome.exit_code, 0);
+            assert_eq!(outcome.target, s);
         }
+    }
+
+    #[test]
+    fn list_scenarios_returns_all() {
+        let names = list_scenarios().expect("should load");
+        assert!(names.contains(&"runc".to_string()));
+        assert!(names.contains(&"gvisor".to_string()));
+        assert!(names.contains(&"landlock".to_string()));
     }
 
     fn test_env() -> EnvFacts {
@@ -584,10 +570,6 @@ mod tests {
         }
     }
 
-    /// Same as `test_env` but with `uid=0`, used by tests that exercise
-    /// downstream logic past the root-uid gate. Keeps the privilege
-    /// check itself testable through `test_env` while letting other
-    /// tests focus on their actual subject.
     fn root_env() -> EnvFacts {
         EnvFacts {
             uid: 0,

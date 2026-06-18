@@ -307,10 +307,7 @@ fn dispatch(
             *dry_run,
         ),
 
-        HelperRequest::OsbaseList { .. } => HelperResponse::Error {
-            code: "NOT_IMPLEMENTED".to_string(),
-            message: "osbase list via helper not yet implemented".to_string(),
-        },
+        HelperRequest::OsbaseList { .. } => dispatch_osbase_list(),
 
         HelperRequest::OsbaseStatus { .. } => HelperResponse::Error {
             code: "NOT_IMPLEMENTED".to_string(),
@@ -423,6 +420,23 @@ fn dispatch_osbase_install(
 }
 
 // ─── Version compatibility ───────────────────────────────────────────────────
+
+// ─── OsbaseList dispatch ─────────────────────────────────────────────────────
+
+fn dispatch_osbase_list() -> HelperResponse {
+    use crate::osbase_install::list_scenarios;
+
+    match list_scenarios() {
+        Ok(names) => HelperResponse::Success {
+            message: names.join("\n"),
+            exit_code: 0,
+        },
+        Err(e) => HelperResponse::Error {
+            code: "MANIFEST_ERROR".to_string(),
+            message: format!("{e}"),
+        },
+    }
+}
 
 /// Simple major-version compatibility check.
 ///

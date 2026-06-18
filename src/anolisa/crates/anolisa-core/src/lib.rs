@@ -27,6 +27,7 @@ pub mod process;
 pub mod register;
 pub mod registry;
 pub mod sandbox_install;
+pub mod sandbox_manifest;
 pub mod self_update;
 pub mod service;
 pub mod state;
@@ -74,7 +75,7 @@ pub use manifest::{AdapterSpec, ComponentManifest, DistributionSelector, FileKin
 pub use osbase_install::{
     OsbaseDomain, OsbaseInstallError, OsbaseInstallOutcome, OsbaseInstallRequest,
     PhaseResult as OsbasePhaseResult, PhaseStatus as OsbasePhaseStatus, RegisterHandler,
-    execute_install,
+    execute_install, list_scenarios,
 };
 pub use register::{
     ConsentState, ProductType, RegisterRecord, RegisterSource, RegisterState, RegistrationManager,
