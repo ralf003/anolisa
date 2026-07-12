@@ -437,6 +437,7 @@ fn classify_io_error(e: std::io::Error, socket_path: &str, context: &str) -> Cos
 
 #[cfg(test)]
 mod tests {
+    use std::io::{Read, Write};
     use std::os::unix::net::UnixListener;
     use std::thread;
 
