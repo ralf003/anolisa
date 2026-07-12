@@ -87,7 +87,7 @@ impl Episode {
         let mut out = String::from("---\n");
         out.push_str(&format!("id: {}\n", self.id));
         out.push_str(&format!("session_id: {}\n", self.session_id));
-        out.push_str(&format!("trigger: {}\n", self.sanitize(&self.trigger)));
+        out.push_str(&format!("trigger: {}\n", Self::sanitize(&self.trigger)));
         out.push_str(&format!("outcome: {}\n", self.outcome));
         out.push_str(&format!("error_count: {}\n", self.error_count));
         out.push_str(&format!("duration_secs: {}\n", self.duration_secs));
@@ -165,7 +165,7 @@ impl Episode {
     /// Replaces newlines and ASCII control chars with spaces.
     /// Does NOT apply YAML double-quoting or backslash escaping:
     /// the hand-rolled frontmatter readers do not interpret those.
-    fn sanitize(&self, s: &str) -> String {
+    fn sanitize(s: &str) -> String {
         s.chars()
             .map(|c| match c {
                 '\n' | '\r' => ' ',
