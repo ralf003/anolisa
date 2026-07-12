@@ -232,7 +232,15 @@ fn public_address() -> Option<String> {
     if !output.status.success() {
         return None;
     }
-    let ip = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    validate_public_ip_response(&output.stdout)
+}
+
+/// Validate and extract a public IP address from a raw response body.
+///
+/// Extracted from `public_address` so validation paths can be tested
+/// independently of the network-dependent curl call.
+fn validate_public_ip_response(body: &[u8]) -> Option<String> {
+    let ip = String::from_utf8_lossy(body).trim().to_string();
     // Validate that the response looks like an IP or hostname (not an HTML error page)
     if ip.is_empty() || ip.len() > 64 || ip.contains('<') {
         return None;
@@ -572,6 +580,51 @@ mod tests {
         assert!(output.sg_message.is_some());
         let msg = output.sg_message.unwrap();
         assert!(msg.contains("7396"));
+    }
+
+    // ─── validate_public_ip_response tests ───────────────────────────────────
+
+    #[test]
+    fn validate_public_ip_response_valid_ipv4() {
+        let result = validate_public_ip_response(b"1.2.3.4\n");
+        assert_eq!(result, Some("1.2.3.4".to_string()));
+    }
+
+    #[test]
+    fn validate_public_ip_response_with_trailing_whitespace() {
+        let result = validate_public_ip_response(b"  203.0.113.1  \n");
+        assert_eq!(result, Some("203.0.113.1".to_string()));
+    }
+
+    #[test]
+    fn validate_public_ip_response_empty_body() {
+        assert_eq!(validate_public_ip_response(b""), None);
+    }
+
+    #[test]
+    fn validate_public_ip_response_whitespace_only() {
+        assert_eq!(validate_public_ip_response(b"\n \t"), None);
+    }
+
+    #[test]
+    fn validate_public_ip_response_too_long() {
+        let long = "x".repeat(65);
+        assert_eq!(validate_public_ip_response(long.as_bytes()), None);
+    }
+
+    #[test]
+    fn validate_public_ip_response_html_error_page() {
+        // Content containing `<` is rejected as likely HTML, not an IP.
+        assert_eq!(
+            validate_public_ip_response(b"<html>502 Bad Gateway</html>"),
+            None
+        );
+    }
+
+    #[test]
+    fn validate_public_ip_response_exactly_64_chars_ok() {
+        let addr = "a".repeat(64);
+        assert_eq!(validate_public_ip_response(addr.as_bytes()), Some(addr));
     }
 
     // ─── public_address tests ───────────────────────────────────────────────
