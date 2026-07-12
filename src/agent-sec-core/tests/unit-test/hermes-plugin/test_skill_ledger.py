@@ -709,3 +709,162 @@ class TestSkillResolution:
 
         assert result is None
         mock_cli.assert_not_called()
+
+
+class TestManagedRootRetry:
+    """Managed-root retry and synthetic warning for unmanaged skills."""
+
+    @patch("src.capabilities.skill_ledger.call_agent_sec_cli")
+    def test_managed_root_retry_finds_attestation(
+        self, mock_cli, tmp_path, monkeypatch
+    ):
+        """Unmanaged primary → retry against managed root → find pass attestation."""
+        from src.capabilities import skill_ledger as skill_ledger_module
+
+        root = tmp_path / "skills"
+        managed_root = tmp_path / "managed-skills"
+        managed_root.mkdir()
+        _make_skill(root, "devops/risky")
+        _make_skill(managed_root, "risky")
+        cap = _make_capability(root, policy="ask")
+
+        # First CLI call returns unmanaged; second returns pass from managed root
+        mock_cli.side_effect = [
+            _cli_status("unmanaged", message=None),
+            _cli_status("pass"),
+        ]
+        monkeypatch.setattr(
+            skill_ledger_module, "_MANAGED_SKILL_ROOTS", (managed_root,)
+        )
+
+        cap._on_pre_tool_call("skill_view", {"name": "risky"}, session_id="s1")
+        output = cap._on_transform_llm_output("assistant response", session_id="s1")
+
+        assert output is None  # pass → no warning
+        assert mock_cli.call_count == 2
+
+    @patch("src.capabilities.skill_ledger.call_agent_sec_cli")
+    def test_managed_root_retry_falls_through_when_all_unmanaged(
+        self, mock_cli, tmp_path, monkeypatch
+    ):
+        """Both primary and all managed roots return unmanaged → synthetic warning."""
+        from src.capabilities import skill_ledger as skill_ledger_module
+
+        root = tmp_path / "skills"
+        managed_root = tmp_path / "managed-skills"
+        managed_root.mkdir()
+        _make_skill(root, "devops/unmanaged")
+        _make_skill(managed_root, "unmanaged")
+        cap = _make_capability(root, policy="warn")
+
+        # Both primary and managed-root queries return unmanaged
+        mock_cli.side_effect = [
+            _cli_status("unmanaged", message=None),
+            _cli_status("unmanaged", message=None),
+        ]
+        monkeypatch.setattr(
+            skill_ledger_module, "_MANAGED_SKILL_ROOTS", (managed_root,)
+        )
+
+        cap._on_pre_tool_call(
+            "skill_view", {"name": "unmanaged"}, session_id="s1"
+        )
+        output = cap._on_transform_llm_output(
+            "assistant response", session_id="s1"
+        )
+
+        assert output is not None
+        assert output.startswith("[agent-sec-core skill-ledger warning]")
+        assert "unmanaged" in output
+        assert "Security status unknown" in output
+
+    @patch("src.capabilities.skill_ledger.call_agent_sec_cli")
+    def test_unmanaged_synthetic_warning_blocks_under_block_policy(
+        self, mock_cli, tmp_path
+    ):
+        """Unmanaged with no managed root → block action under block policy."""
+        root = tmp_path / "skills"
+        _make_skill(root, "security/blocked")
+        cap = _make_capability(root, policy="block")
+
+        mock_cli.return_value = _cli_status("unmanaged", message=None)
+
+        result = cap._on_pre_tool_call(
+            "skill_view", {"name": "blocked"}, run_id="r1"
+        )
+
+        assert result is not None
+        assert result["action"] == "block"
+        assert "unmanaged" in result["message"]
+        assert "Security status unknown" in result["message"]
+
+    @patch("src.capabilities.skill_ledger.call_agent_sec_cli")
+    def test_unmanaged_synthetic_warning_under_ask_policy(
+        self, mock_cli, tmp_path
+    ):
+        """Unmanaged with no managed root → warning prepended under ask policy."""
+        root = tmp_path / "skills"
+        _make_skill(root, "devops/unmanaged")
+        cap = _make_capability(root, policy="ask")
+
+        mock_cli.return_value = _cli_status("unmanaged", message=None)
+
+        cap._on_pre_tool_call(
+            "skill_view", {"name": "unmanaged"}, session_id="s1"
+        )
+        output = cap._on_transform_llm_output(
+            "assistant response", session_id="s1"
+        )
+
+        assert output is not None
+        assert output.startswith("[agent-sec-core skill-ledger warning]")
+        assert "unmanaged" in output
+        assert "Security status unknown" in output
+
+    @patch("src.capabilities.skill_ledger.call_agent_sec_cli")
+    def test_non_unmanaged_without_message_still_passes_silently(
+        self, mock_cli, tmp_path
+    ):
+        """Regression: non-unmanaged status with null message still fails open."""
+        root = tmp_path / "skills"
+        _make_skill(root, "devops/warn-skill")
+        cap = _make_capability(root, policy="block")
+
+        mock_cli.return_value = _cli_status("warn", message=None)
+
+        result = cap._on_pre_tool_call(
+            "skill_view", {"name": "warn-skill"}, run_id="r1"
+        )
+
+        # Original behavior preserved: non-unmanaged + no message → fail-open
+        assert result is None
+        assert (
+            cap._on_transform_llm_output("assistant response", run_id="r1")
+            is None
+        )
+
+    @patch("src.capabilities.skill_ledger.call_agent_sec_cli")
+    def test_query_managed_root_skips_nonexistent_dirs(
+        self, mock_cli, tmp_path, monkeypatch
+    ):
+        """_query_managed_root returns None when no managed dir exists."""
+        from src.capabilities import skill_ledger as skill_ledger_module
+
+        root = tmp_path / "skills"
+        _make_skill(root, "devops/missing-from-managed")
+        cap = _make_capability(root, policy="ask")
+
+        # Managed root path that does NOT exist on disk
+        nonexistent = tmp_path / "nonexistent-managed"
+        mock_cli.return_value = _cli_status("unmanaged", message=None)
+        monkeypatch.setattr(
+            skill_ledger_module, "_MANAGED_SKILL_ROOTS", (nonexistent,)
+        )
+
+        # Primary call returns unmanaged; managed root dir doesn't exist →
+        # only 1 CLI call total (no managed retry)
+        cap._on_pre_tool_call(
+            "skill_view", {"name": "missing-from-managed"}, session_id="s1"
+        )
+
+        assert mock_cli.call_count == 1  # only the primary call
